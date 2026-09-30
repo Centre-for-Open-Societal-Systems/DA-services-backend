@@ -56,10 +56,11 @@ services:
       # write, and uv/pip hang. Mounting the parent lets `bench init frappe-bench`
       # create the bench directory itself (it refuses a pre-existing path).
       - bench-data:/workspace/development
-      # The DA-services-backend repository IS the da_services Frappe app. Mounting
-      # it into the bench's apps/ folder keeps bench, virtualenv and site data out
-      # of the repo (same split the oan_grievance_service team uses).
-      - ${DA_SERVICES_REPO:-../../DA-services-backend}:/workspace/development/frappe-bench/apps/da_services:cached
+      # The DA-services-backend repository IS the da_services Frappe app. It is
+      # mounted at a neutral path and linked into the bench after `bench init`
+      # (apps/da_services -> /workspace/da_services_repo). Mounting straight into
+      # apps/ would pre-create frappe-bench/ and make bench init refuse to run.
+      - ${DA_SERVICES_REPO:-../../DA-services-backend}:/workspace/da_services_repo:cached
     working_dir: /workspace/development
 
 volumes:

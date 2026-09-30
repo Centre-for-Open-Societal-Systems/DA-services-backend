@@ -40,15 +40,21 @@ Inside the container:
 
 ```
 /workspace                                    <- bind mount of oan_da_services_devcontainer
+/workspace/da_services_repo                   <- bind mount of THIS repository
 /workspace/development                        <- Docker named volume "bench-data"
 /workspace/development/frappe-bench           <- the bench (frappe clone, env, node_modules, sites)
-/workspace/development/frappe-bench/apps/da_services   <- bind mount of THIS repository
+/workspace/development/frappe-bench/apps/da_services -> /workspace/da_services_repo   (symlink)
 ```
 
 Why a named volume for the bench: on Docker Desktop a Windows bind mount is far too slow
 for the tens of thousands of small files `bench init` and `yarn` write, and `uv`/`pip`
 hang on it. The bench therefore lives on the Linux side; only the app repository is
 bind-mounted so you edit code with your normal editor and Frappe picks it up live.
+
+Why a symlink instead of mounting straight into `apps/`: Docker would pre-create the
+`frappe-bench/` directory before `bench init` runs, and `bench init` refuses a path that
+already exists. Mounting the repo at a neutral path and linking it in afterwards keeps
+first-time setup to a single `docker compose up`.
 
 Ports are offset from the grievance stack so both can run at once:
 
@@ -148,13 +154,14 @@ MSYS_NO_PATHCONV=1 docker exec -w /workspace/development/frappe-bench oan_da_ser
   bench set-config -g developer_mode 1'
 ```
 
-### 4.6 Create the site and install the app
+### 4.6 Link the app, create the site and install
 
-The repository is already mounted at `apps/da_services`; register it with the bench,
-then create the site and install.
+The repository is mounted at `/workspace/da_services_repo`. Link it into the bench's
+`apps/` folder, register it, then create the site and install.
 
 ```bash
 MSYS_NO_PATHCONV=1 docker exec -w /workspace/development/frappe-bench oan_da_services_dev-frappe-1 bash -lc '
+  ln -sfn /workspace/da_services_repo apps/da_services &&
   grep -qx da_services sites/apps.txt || echo da_services >> sites/apps.txt &&
   env/bin/pip install -e apps/da_services &&
   bench new-site da-services.localhost --mariadb-user-host-login-scope=% --db-root-password 123 --admin-password admin &&
@@ -217,7 +224,12 @@ volumes across restarts. `docker compose down -v` deletes them.
 - **`bench` command hangs for many minutes** — check the bench is on the named volume
   (`df -hT /workspace/development` should say `ext4`, not `9p`), and that `C:` has space.
 - **`Bench instance already exists`** — `bench init` refuses a pre-existing directory;
-  remove the empty `frappe-bench` folder in the volume and re-run.
+  remove the empty `frappe-bench` folder in the volume and re-run. This happens if the
+  repo was mounted straight into `apps/` (older compose); use the `docs/devcontainer`
+  compose, which mounts it at `/workspace/da_services_repo` instead.
+- **`ModuleNotFoundError: da_services` after recreating the container** — the
+  `apps/da_services` symlink lives on the volume and survives, but re-run the `ln -sfn`
+  from 4.6 if the volume was recreated.
 - **Site loads but assets are missing** — `bench build` inside the container.
 - **`da_services UNVERSIONED` in `list-apps`** — the repo has no commit on the current
   branch yet; harmless.
