@@ -26,9 +26,7 @@ _REGISTRATION_LOCK = threading.Lock()
 root_route = prefixed("/api/v1")
 
 
-@root_route(
-	"/da-services/health", methods=("GET",), allow_guest=True, summary="DA Services health check"
-)
+@root_route("/da-services/health", methods=("GET",), allow_guest=True, summary="DA Services health check")
 @frappe.whitelist(allow_guest=True)
 @handle_api_errors
 def get_health():
@@ -58,12 +56,15 @@ def ensure_routes_registered() -> None:
 def _register() -> None:
 	import frappe.api
 
+	from da_services.api import middleware
+	from da_services.api.middleware import check_da_assignment
+
 	ensure_auth_routes()
 
 	for rule in _rules:
 		if rule not in frappe.api.API_URL_MAP._rules:
 			frappe.api.API_URL_MAP.add(rule.empty())
 
-	from da_services.api.middleware import check_da_assignment
-
-	register_namespace(prefix=NAMESPACE, exempt_paths=sorted(_exempt_paths), revocation_check=check_da_assignment)
+	register_namespace(
+		prefix=NAMESPACE, exempt_paths=sorted(_exempt_paths), revocation_check=check_da_assignment
+	)
