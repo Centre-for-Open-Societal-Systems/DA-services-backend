@@ -21,6 +21,11 @@ from frappe.utils import today
 from da_services.services import constants as C
 from da_services.utils import audit
 
+# Denial reasons written to the audit log (`DA Audit Event.reason`).
+MISSING_ROLE = "missing role"
+OUT_OF_SCOPE = "out of scope"
+SCOPE_UNRESOLVED = "scope unresolved"  # grant level missing on the record, see ScopeContext.scope_decision
+
 
 @dataclass(frozen=True)
 class ScopeContext:
@@ -38,23 +43,44 @@ class ScopeContext:
 		return bool(self.roles & set(roles))
 
 	def covers(self, region: str | None = None, woreda: str | None = None, zone: str | None = None) -> bool:
-		"""True when the given Region / Zone / Woreda falls inside this user's scope.
+		"""True when the given Region / Zone / Woreda falls inside this user's scope."""
+		return self.scope_decision(region, woreda, zone)[0]
+
+	def scope_decision(
+		self, region: str | None = None, woreda: str | None = None, zone: str | None = None
+	) -> tuple[bool, str]:
+		"""(covered, reason) for the given Region / Zone / Woreda.
 
 		The narrowest grant wins: a Woreda grant covers that Woreda; a Zone grant covers
 		every Woreda in the Zone; a Region-only grant covers the whole Region.
 		Unrestricted roles cover everything.
+
+		A grant is only honoured at the level it was issued. When the record carries no
+		value at that level (a registry DA without a Zone, checked against a Zone grant)
+		the grant is **not** widened to the Region: that would silently give a Zone
+		Supervisor the whole Region whenever registry data is incomplete. The denial is
+		reported as ``SCOPE_UNRESOLVED`` instead of ``OUT_OF_SCOPE`` so operators can tell
+		missing registry data from a wrong grant. Follow-up: resolve the Zone from the
+		Woreda through master data once `DA Administrative Area` exists.
 		"""
 		if self.unrestricted:
-			return True
+			return True, "unrestricted"
 		if woreda and woreda in self.woreda_scopes:
-			return True
+			return True, "woreda"
 		if zone and zone in self.zone_scopes:
-			return True
-		if region and region in self.region_scopes and not (self.woreda_scopes or self.zone_scopes):
-			return True
-		if region and region in self.region_scopes and woreda is None and zone is None:
-			return True
-		return False
+			return True, "zone"
+		narrow = bool(self.woreda_scopes or self.zone_scopes)
+		in_region = bool(region) and region in self.region_scopes
+		if in_region and not narrow:
+			return True, "region"
+		if (
+			in_region
+			and narrow
+			and (not self.zone_scopes or zone is None)
+			and (not self.woreda_scopes or woreda is None)
+		):
+			return False, SCOPE_UNRESOLVED
+		return False, OUT_OF_SCOPE
 
 	def owns_da(self, da_id: str) -> bool:
 		return bool(da_id) and da_id in self.da_ids
@@ -125,7 +151,7 @@ def require_roles(*roles: str, user: str | None = None) -> ScopeContext:
 	if ctx.user == "Guest" or not ctx.has_any_role(*roles):
 		_deny(
 			_("You do not have permission to perform this action."),
-			reason="missing role",
+			reason=MISSING_ROLE,
 			required_roles=sorted(roles),
 		)
 	return ctx
@@ -148,13 +174,22 @@ def require_da_access(
 	ctx = ctx or get_scope_context()
 	if ctx.unrestricted:
 		return ctx
-	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(region, woreda, zone):
-		return ctx
+	reason = OUT_OF_SCOPE
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		covered, reason = ctx.scope_decision(region, woreda, zone)
+		if covered:
+			return ctx
 	if ctx.has_any_role(C.ROLE_DA) and ctx.owns_da(da_id):
 		return ctx
+	if reason == SCOPE_UNRESOLVED:
+		message = _("DA {0} has no Zone/Woreda in the registry, so your scope cannot be checked.").format(
+			da_id
+		)
+	else:
+		message = _("DA {0} is outside your scope.").format(da_id)
 	_deny(
-		_("DA {0} is outside your scope.").format(da_id),
-		reason="out of scope",
+		message,
+		reason=reason,
 		entity_type="DA",
 		entity_name=da_id,
 		da_region=region,

@@ -19,7 +19,8 @@ from da_services.services import rbac_service
 @handle_api_errors
 def list_assignments(user=None, role=None, region=None, woreda=None, active=None, limit=50, start=0):
 	rows = rbac_service.list_assignments(user, role, region, woreda, active, limit, start)
-	return success_response(data=rows, meta={"count": len(rows), "limit": int(limit), "start": int(start)})
+	limit, start = rbac_service.clamp_page(limit, start)
+	return success_response(data=rows, meta={"count": len(rows), "limit": limit, "start": start})
 
 
 @route("/rbac-assignments", methods=("POST",), status=201, summary="Grant a role within a scope")

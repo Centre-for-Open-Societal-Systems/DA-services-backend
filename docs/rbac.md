@@ -45,6 +45,17 @@ request. `require_roles(...)` and `require_da_access(da_id, region, woreda)` app
 
 Caller-supplied Region/Woreda values are never trusted for the check.
 
+A grant is honoured only at the level it was issued. If the registry record has no value
+at that level (a DA without a Zone checked against a Zone grant, or without a Woreda
+against a Woreda grant), access is **denied, not widened** to the Region: widening would
+hand a Zone Supervisor the whole Region whenever registry data is incomplete. The audit
+row carries `reason = scope unresolved` (instead of `out of scope`) so operators can see
+missing registry data rather than a wrong grant. Operational rule until the registry
+populates Zone for every DA: issue Region + Woreda grants, not Zone grants. Follow-up:
+derive the Zone from the Woreda through `DA Administrative Area` once master data exists.
+
+Admin list endpoints clamp `limit` to 1..500 and `start` to >= 0 (`rbac_service.clamp_page`).
+
 ## Authentication
 
 Login, refresh, logout and password reset come from the shared `oan_auth_service` app

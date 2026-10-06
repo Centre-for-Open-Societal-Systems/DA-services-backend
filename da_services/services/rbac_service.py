@@ -14,6 +14,14 @@ from frappe.utils import getdate, today
 from da_services.services import constants as C
 from da_services.utils.permissions import ScopeContext, require_roles
 
+MAX_PAGE_LENGTH = 500
+
+
+def clamp_page(limit, start) -> tuple[int, int]:
+	"""Page arguments as the database will see them: 1..MAX_PAGE_LENGTH rows, start >= 0."""
+	return max(1, min(int(limit), MAX_PAGE_LENGTH)), max(0, int(start))
+
+
 FIELDS = [
 	"name",
 	"user",
@@ -69,13 +77,14 @@ def list_assignments(
 		filters["woreda_scope"] = woreda
 	if active is not None and active != "":
 		filters["active"] = 1 if str(active).lower() in ("1", "true", "yes") else 0
+	limit, start = clamp_page(limit, start)
 	rows = frappe.get_all(
 		"DA RBAC Assignment",
 		filters=filters,
 		fields=FIELDS,
 		order_by="modified desc",
-		limit_page_length=int(limit),
-		limit_start=int(start),
+		limit_page_length=limit,
+		limit_start=start,
 	)
 	return [serialize(frappe._dict(r)) for r in rows]
 
