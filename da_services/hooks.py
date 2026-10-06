@@ -8,9 +8,18 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# Open decision with the team: whether DA Services shares the oan_auth_service Frappe
-# app (as oan_grievance_service does) for OAN IAM / JWT handling. Add it here once agreed.
-# required_apps = ["oan_auth_service"]
+# Login, tokens and password reset come from the shared oan_auth_service app (same as
+# oan_grievance_service). Interim decision until central OAN IAM / Fayda sign-in exist;
+# the auth layer is isolated so either can replace it without touching the scope rule.
+required_apps = ["oan_auth_service"]
+
+# Register our /api/v1/da/* REST routes and claim the JWT-protected namespaces in every
+# worker process (the rule list and namespace registry are per-process state).
+before_request = ["da_services.api.router.ensure_routes_registered"]
+
+# oan_auth_service's GET /api/v1/me collects app profiles through this hook, so the UI
+# shell learns role, scope, DA-ID and menu in one call after login.
+on_user_profile = ["da_services.api.v1.me.resolve_user_profile_hook"]
 
 add_to_apps_screen = [
 	{

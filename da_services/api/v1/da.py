@@ -1,33 +1,21 @@
-"""v1: read a DA reference from the registry, within the caller's scope.
+"""v1: DA records, read from the registry within the caller's scope.
 
-Path: /api/method/da_services.api.v1.da.get_da?da_id=DA-000001
+GET /api/v1/da/agents/{da_id}
 
-Thin by design: authorize, call the integration, shape the response. The scope rule
-lives in utils.permissions and the registry access in integrations.da_registry.
+Thin by design: authorise, call the service, wrap in the envelope. The scope rule
+lives in services/da_lookup.py and utils/permissions.py.
 """
 
 import frappe
-from frappe import _
+from oan_auth_service.api.utils import handle_api_errors, success_response
 
-from da_services.integrations.da_registry.client import DANotFound, DARegistryUnavailable, get_client
-from da_services.services import constants as C
-from da_services.utils.permissions import require_da_access, require_roles
+from da_services.api.router import route
+from da_services.services.da_lookup import get_da_reference
 
 
+@route("/agents/<da_id>", methods=("GET",), summary="DA reference from the registry, scope-checked")
 @frappe.whitelist()
-def get_da(da_id: str) -> dict:
-	ctx = require_roles(*C.DA_READ_ROLES)
-	if not da_id:
-		frappe.throw(_("da_id is required"), frappe.ValidationError)
-
-	try:
-		ref = get_client().get_da(da_id)
-	except DANotFound:
-		frappe.throw(_("DA {0} was not found in the registry.").format(da_id), frappe.DoesNotExistError)
-	except DARegistryUnavailable:
-		frappe.throw(_("The DA Registry is unavailable. Try again shortly."), frappe.ValidationError)
-
-	# Scope is checked against the registry's own Region / Woreda for this DA, never
-	# against anything the caller supplied.
-	require_da_access(ref.da_id, ref.region, ref.woreda, ctx)
-	return ref.to_dict()
+@handle_api_errors
+def get_da(da_id: str):
+	ref = get_da_reference(da_id)
+	return success_response(data=ref.to_dict())

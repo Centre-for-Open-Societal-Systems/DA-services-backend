@@ -14,6 +14,7 @@ from da_services.integrations.da_registry.client import (
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.integrations.da_registry.schemas import LifecycleOutcome
 from da_services.services import constants as C
+from da_services.services.da_lookup import get_da_reference
 
 SUPERVISOR = "test-supervisor2@da.local"
 
@@ -108,21 +109,33 @@ class TestGetDaEndpoint(IntegrationTestCase):
 
 	def test_supervisor_reads_da_in_own_woreda(self):
 		frappe.set_user(SUPERVISOR)
-		out = da_api.get_da("DA-000001")
-		self.assertEqual(out["da_id"], "DA-000001")
-		self.assertEqual(out["woreda"], "ET04-W01")
+		ref = get_da_reference("DA-000001")
+		self.assertEqual(ref.da_id, "DA-000001")
+		self.assertEqual(ref.woreda, "ET04-W01")
 
 	def test_supervisor_is_denied_outside_woreda(self):
 		frappe.set_user(SUPERVISOR)
 		with self.assertRaises(frappe.PermissionError):
-			da_api.get_da("DA-000003")  # ET03-W02
+			get_da_reference("DA-000003")  # ET03-W02
 
 	def test_guest_is_denied(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
-			da_api.get_da("DA-000001")
+			get_da_reference("DA-000001")
 
 	def test_unknown_da_is_not_found(self):
 		frappe.set_user("Administrator")
 		with self.assertRaises(frappe.DoesNotExistError):
-			da_api.get_da("DA-424242")
+			get_da_reference("DA-424242")
+
+	def test_endpoint_wraps_success_in_envelope(self):
+		frappe.set_user(SUPERVISOR)
+		out = da_api.get_da("DA-000001")
+		self.assertEqual(out["status"], "success")
+		self.assertEqual(out["data"]["da_id"], "DA-000001")
+
+	def test_endpoint_wraps_denial_in_error_envelope(self):
+		frappe.set_user(SUPERVISOR)
+		out = da_api.get_da("DA-000003")
+		self.assertEqual(out["status"], "error")
+		self.assertEqual(frappe.response.get("http_status_code"), 403)

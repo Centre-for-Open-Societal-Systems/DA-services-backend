@@ -179,6 +179,40 @@ MSYS_NO_PATHCONV=1 docker exec -w /workspace/development/frappe-bench oan_da_ser
 
 Dev-only credentials: MariaDB root `123`, site Administrator `admin`.
 
+### 4.6a Install the shared auth app and JWT keys
+
+`da_services` requires `oan_auth_service` (login, tokens, password reset). Fetch it into
+the bench, install it on the site, then give the site an RSA signing key. Tokens are
+RS256: only this site holds the private key; Kong and other apps verify with the public
+half from `GET /api/v1/auth/keys`. The key lives in the site folder, never in the repo.
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec -w /workspace/development/frappe-bench oan_da_services_dev-frappe-1 bash -lc '
+  bench get-app --branch develop https://github.com/Centre-for-Open-Societal-Systems/oan_auth_service.git &&
+  bench --site da-services.localhost install-app oan_auth_service &&
+  mkdir -p sites/da-services.localhost/keys &&
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out sites/da-services.localhost/keys/jwt_v1.pem &&
+  chmod 600 sites/da-services.localhost/keys/jwt_v1.pem &&
+  bench --site da-services.localhost set-config -p jwt_private_keys "{\"v1\": \"keys/jwt_v1.pem\"}" &&
+  bench --site da-services.localhost set-config jwt_current_kid v1 &&
+  bench --site da-services.localhost set-config jwt_issuer da-services-dev &&
+  bench --site da-services.localhost migrate'
+```
+
+Then:
+
+```bash
+# login → access_token
+curl -s -X POST -H "Host: da-services.localhost" -H "Content-Type: application/json" \
+  -d '{"usr":"Administrator","pwd":"admin"}' http://127.0.0.1:8200/api/v1/auth/login
+# our profile
+curl -s -H "Host: da-services.localhost" -H "Authorization: Bearer <access_token>" \
+  http://127.0.0.1:8200/api/v1/da/me
+```
+
+`GET /api/v1/da/health` needs no token. Everything else under `/api/v1/da/*` and
+`/api/method/da_services.*` returns 401 without a valid bearer token.
+
 ### 4.7 Run it
 
 ```bash
