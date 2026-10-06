@@ -28,8 +28,8 @@ a DA-ID; a Woreda needs its Region; `effective_to >= effective_from`. Saving an 
 grant adds the role to the User; revocation deactivates the row and closes the window
 but never deletes it.
 
-Region / Woreda are stored as administrative codes. Zone will be added when the field
-list is final.
+Region / Zone / Woreda are stored as administrative codes (`region_scope`, `zone_scope`,
+`woreda_scope`). Zone is optional until the field list is final; a Zone needs its Region.
 
 ## Scope rule (`utils/permissions.py`)
 
@@ -37,9 +37,9 @@ list is final.
 request. `require_roles(...)` and `require_da_access(da_id, region, woreda)` apply:
 
 1. Unrestricted (OAN Administrator, System Manager, Administrator): always.
-2. Supervisor / Executive: only if the DA's Region/Woreda, **as returned by the
-   registry**, is inside their scope. A Woreda grant covers that Woreda; a Region-only
-   grant covers every Woreda in it.
+2. Supervisor / Executive: only if the DA's Region/Zone/Woreda, **as returned by the
+   registry**, is inside their scope. The narrowest grant wins: a Woreda grant covers that
+   Woreda, a Zone grant every Woreda in the Zone, a Region-only grant the whole Region.
 3. Development Agent: only their own DA-ID.
 4. Anyone else, including Communications Officer: denied.
 
@@ -61,6 +61,22 @@ DA record and the permitted menu.
 Fayda sign-in and central OAN IAM are open decisions; the auth layer is isolated so
 either can replace the interim login without touching the scope rule.
 
+## Audit log
+
+`DA Audit Event` is append-only (edits and deletes are refused in the controller, and no
+role holds create/write/delete). `utils/audit.py` writes:
+
+- `access.denied` for every refused `require_roles` / `require_da_access` call, with the
+  reason (`missing role`, `out of scope`), the target DA and its Region/Zone/Woreda.
+- `rbac.assignment.created` / `updated` / `revoked` from the doctype controller, with a
+  field-level diff.
+
+Denials happen inside a request that is about to fail, and the API layer rolls that
+transaction back. Denial rows are therefore queued on `frappe.local` and written by the
+`after_request` hook in their own commit (`audit.flush`). Allowed actions are written in
+the same transaction as the change. Each row carries user, roles at the time, source
+(`api` / `system`), request id and timestamp (HLD 10.3).
+
 ## Frappe permission hooks
 
 `permissions.py` registers `permission_query_conditions` and `has_permission` for the
@@ -72,13 +88,14 @@ Every new doctype must register both before it is exposed.
 Roles are verified by what they **cannot** do. `tests/test_rbac.py` and
 `tests/test_api_auth.py` cover: Supervisor outside own Woreda, Executive outside own
 Region, DA reading another DA, Communications Officer touching DA identity, expired
-grant, Guest, token without any assignment. The full negative matrix per role is a
-pending subtask.
+grant, Guest, token without any assignment. `tests/test_role_matrix.py` is the per-role negative matrix (one user per role; every
+forbidden action in Appendix D that exists in the backend today, plus the positive case
+so a test cannot pass by denying everyone). `tests/test_audit.py` covers denial and
+assignment audit rows, immutability and the deferred write.
 
 ## Open points
 
-- Zone level in scope (Shikha's field list).
+- Zone codes: confirm the master list and whether Zone is mandatory.
 - Role names vs the approved OAN RBAC model.
 - Mapping of these roles to OpenG2P groups and Woreda scoping in registry views (with Yash).
 - User provisioning: Registry approval → Services user + assignment.
-- Audit events for denials and assignment changes (pending subtask).

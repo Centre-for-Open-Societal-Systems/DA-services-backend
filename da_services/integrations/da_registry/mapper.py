@@ -19,6 +19,7 @@ def to_da_reference(payload: dict) -> DAReference:
 		active_status=payload.get("active_status") or "",
 		approval_status=payload.get("approval_status") or "",
 		region=payload.get("region"),
+		zone=payload.get("zone"),
 		woreda=payload.get("woreda"),
 		kebele=payload.get("assigned_kebele") or payload.get("kebele"),
 		education_tier=payload.get("education_tier"),

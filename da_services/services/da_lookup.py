@@ -27,5 +27,5 @@ def get_da_reference(da_id: str, ctx: ScopeContext | None = None) -> DAReference
 
 	# Scope is checked against the registry's own Region / Woreda for this DA, never
 	# against anything the caller supplied.
-	require_da_access(ref.da_id, ref.region, ref.woreda, ctx)
+	require_da_access(ref.da_id, ref.region, ref.woreda, ctx, zone=ref.zone)
 	return ref

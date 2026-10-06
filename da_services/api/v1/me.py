@@ -102,7 +102,11 @@ def profile_for(ctx: ScopeContext, include_agent: bool = True) -> dict:
 		"user": ctx.user,
 		"roles": [r for r in C.DA_SERVICES_ROLES if r in ctx.roles],
 		"unrestricted": ctx.unrestricted,
-		"scope": {"regions": sorted(ctx.region_scopes), "woredas": sorted(ctx.woreda_scopes)},
+		"scope": {
+			"regions": sorted(ctx.region_scopes),
+			"zones": sorted(ctx.zone_scopes),
+			"woredas": sorted(ctx.woreda_scopes),
+		},
 		"da_id": da_id,
 		"menu": menu_for(ctx),
 	}

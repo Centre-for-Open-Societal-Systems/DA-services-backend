@@ -7,13 +7,27 @@ from frappe.model.document import Document
 from frappe.utils import getdate
 
 from da_services.services import constants as C
+from da_services.utils import audit
+
+AUDITED_FIELDS = (
+	"user",
+	"role",
+	"active",
+	"da_id",
+	"region_scope",
+	"zone_scope",
+	"woreda_scope",
+	"effective_from",
+	"effective_to",
+)
 
 
 class DARBACAssignment(Document):
-	"""One role grant for one user, bounded by Region / Woreda and a date window.
+	"""One role grant for one user, bounded by Region / Zone / Woreda and a date window.
 
 	Saving a row also attaches the role to the User so Frappe's own DocPerm checks agree
 	with ours; the scope questions (which Woreda, which DA) stay in utils.permissions.
+	Every create, change and revocation is written to the audit log.
 	"""
 
 	def validate(self):
@@ -24,8 +38,38 @@ class DARBACAssignment(Document):
 	def before_insert(self):
 		self.assigned_by = frappe.session.user
 
+	def after_insert(self):
+		audit.record(
+			audit.RBAC_CREATED,
+			entity_type=self.doctype,
+			entity_name=self.name,
+			details=self._snapshot(),
+		)
+
 	def on_update(self):
 		self._sync_user_role()
+		if self.is_new():
+			return
+		before = self.get_doc_before_save()
+		if not before:
+			return
+		changes = {
+			f: {"from": before.get(f), "to": self.get(f)}
+			for f in AUDITED_FIELDS
+			if before.get(f) != self.get(f)
+		}
+		if not changes:
+			return
+		revoked = before.get("active") and not self.active
+		audit.record(
+			audit.RBAC_REVOKED if revoked else audit.RBAC_UPDATED,
+			entity_type=self.doctype,
+			entity_name=self.name,
+			details={"changes": _jsonable(changes), "user": self.user, "role": self.role},
+		)
+
+	def _snapshot(self) -> dict:
+		return _jsonable({f: self.get(f) for f in AUDITED_FIELDS})
 
 	def _validate_role(self):
 		if self.role not in C.DA_SERVICES_ROLES:
@@ -45,6 +89,8 @@ class DARBACAssignment(Document):
 			frappe.throw(_("An Executive assignment needs a Region scope."))
 		if self.woreda_scope and not self.region_scope:
 			frappe.throw(_("A Woreda scope needs its Region."))
+		if self.zone_scope and not self.region_scope:
+			frappe.throw(_("A Zone scope needs its Region."))
 
 	def _validate_window(self):
 		if self.effective_to and getdate(self.effective_to) < getdate(self.effective_from):
@@ -64,3 +110,11 @@ class DARBACAssignment(Document):
 		user.append("roles", {"role": self.role})
 		user.flags.ignore_permissions = True
 		user.save()
+
+
+def _jsonable(value):
+	if isinstance(value, dict):
+		return {k: _jsonable(v) for k, v in value.items()}
+	if hasattr(value, "isoformat"):
+		return value.isoformat()
+	return value
