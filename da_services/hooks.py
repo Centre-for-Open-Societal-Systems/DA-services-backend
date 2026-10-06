@@ -17,6 +17,10 @@ required_apps = ["oan_auth_service"]
 # worker process (the rule list and namespace registry are per-process state).
 before_request = ["da_services.api.router.ensure_routes_registered"]
 
+# Denied-access audit rows are queued during the request (the failing transaction is
+# rolled back) and persisted here in their own commit.
+after_request = ["da_services.utils.audit.flush"]
+
 # oan_auth_service's GET /api/v1/auth/me collects app profiles through this hook, so the UI
 # shell learns role, scope, DA-ID and menu in one call after login.
 on_user_profile = ["da_services.api.v1.me.resolve_user_profile_hook"]

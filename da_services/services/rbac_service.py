@@ -21,6 +21,7 @@ FIELDS = [
 	"active",
 	"da_id",
 	"region_scope",
+	"zone_scope",
 	"woreda_scope",
 	"effective_from",
 	"effective_to",
@@ -28,7 +29,16 @@ FIELDS = [
 	"notes",
 	"modified",
 ]
-MUTABLE = {"active", "region_scope", "woreda_scope", "da_id", "effective_from", "effective_to", "notes"}
+MUTABLE = {
+	"active",
+	"region_scope",
+	"zone_scope",
+	"woreda_scope",
+	"da_id",
+	"effective_from",
+	"effective_to",
+	"notes",
+}
 
 
 def require_admin() -> ScopeContext:
@@ -84,6 +94,7 @@ def create_assignment(
 	woreda_scope=None,
 	da_id=None,
 	notes=None,
+	zone_scope=None,
 ) -> dict:
 	require_admin()
 	if not user or not role:
@@ -97,6 +108,7 @@ def create_assignment(
 			"effective_from": effective_from or today(),
 			"effective_to": effective_to,
 			"region_scope": region_scope,
+			"zone_scope": zone_scope,
 			"woreda_scope": woreda_scope,
 			"da_id": da_id,
 			"notes": notes,

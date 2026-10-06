@@ -15,6 +15,7 @@
   "da_id",
   "sec_scope",
   "region_scope",
+  "zone_scope",
   "col_scope",
   "woreda_scope",
   "sec_validity",
@@ -78,6 +79,13 @@
    "label": "Region"
   },
   {
+   "description": "Zone code (between Region and Woreda in the Ethiopian hierarchy). Optional until the field list is final.",
+   "fieldname": "zone_scope",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Zone"
+  },
+  {
    "fieldname": "col_scope",
    "fieldtype": "Column Break"
   },
@@ -124,7 +132,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-01 00:00:00.000000",
+ "modified": "2026-10-06 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA RBAC Assignment",

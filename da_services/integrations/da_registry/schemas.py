@@ -22,6 +22,7 @@ class DAReference:
 	active_status: str  # Active / On-leave / Separated (FSD 3.2.1 col 5)
 	approval_status: str  # Draft / Awaiting review / Approved / Published (col 9)
 	region: str | None = None
+	zone: str | None = None
 	woreda: str | None = None
 	kebele: str | None = None
 	education_tier: str | None = None

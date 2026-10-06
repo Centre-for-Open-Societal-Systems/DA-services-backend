@@ -34,9 +34,10 @@ def create_assignment(
 	woreda_scope=None,
 	da_id=None,
 	notes=None,
+	zone_scope=None,
 ):
 	row = rbac_service.create_assignment(
-		user, role, effective_from, effective_to, region_scope, woreda_scope, da_id, notes
+		user, role, effective_from, effective_to, region_scope, woreda_scope, da_id, notes, zone_scope
 	)
 	return success_response(data=row, message="Assignment created")
 
