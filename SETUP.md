@@ -218,7 +218,133 @@ volumes across restarts. `docker compose down -v` deletes them.
 
 ---
 
-## 6. Troubleshooting
+## 6. Authentication (oan_auth_service)
+
+DA Services uses `oan_auth_service`, the shared OAN JWT authentication app, for all
+API authentication. This is the same auth module used by `oan_grievance_service`.
+
+### 6.1 Install oan_auth_service
+
+`oan_auth_service` is declared in `hooks.py` as `required_apps`, so it must be installed
+before `da_services`. Inside the container:
+
+```bash
+bench get-app https://github.com/Centre-for-Open-Societal-Systems/oan_auth_service.git --branch develop
+bench --site da-services.localhost install-app oan_auth_service
+bench --site da-services.localhost migrate
+```
+
+### 6.2 Generate JWT signing keys
+
+oan_auth_service uses RS256 asymmetric signing with key-ID rotation. Generate a private
+key and configure it in `site_config.json`:
+
+```bash
+# Generate a 3072-bit RSA key
+mkdir -p sites/da-services.localhost/keys
+openssl genrsa -out sites/da-services.localhost/keys/jwt_v1.pem 3072
+chmod 600 sites/da-services.localhost/keys/jwt_v1.pem
+
+# Register the key with oan_auth_service
+bench --site da-services.localhost set-config jwt_private_keys '{"v1": "keys/jwt_v1.pem"}' --parse
+bench --site da-services.localhost set-config jwt_current_kid "v1"
+bench --site da-services.localhost set-config jwt_issuer "oan-da-services"
+```
+
+### 6.3 Configure token TTLs
+
+```bash
+bench --site da-services.localhost set-config jwt_access_token_ttl 900        # 15 minutes
+bench --site da-services.localhost set-config jwt_refresh_token_ttl 604800    # 7 days
+bench --site da-services.localhost set-config jwt_refresh_token_ttl_remember_me 7776000  # 90 days
+```
+
+### 6.4 Site configuration reference
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `jwt_private_keys` | `{"kid": "path"}` | Map of key ID to PEM file path (relative to site dir) |
+| `jwt_current_kid` | `string` | Active key ID for signing new tokens |
+| `jwt_issuer` | `string` | `iss` claim in issued tokens |
+| `jwt_access_token_ttl` | `int` | Access token lifetime in seconds (default: 900) |
+| `jwt_refresh_token_ttl` | `int` | Refresh token lifetime in seconds (default: 604800) |
+| `jwt_refresh_token_ttl_remember_me` | `int` | Refresh TTL when "remember me" is set (default: 7776000) |
+
+No secrets are stored in the repository. Keys and configuration live in `site_config.json`
+and the site's `keys/` directory, both of which are gitignored.
+
+### 6.5 Login flow
+
+```
+  Client                     DA Services / oan_auth_service
+    │                                    │
+    │  POST /api/v1/auth/login           │
+    │  { usr, pwd }                      │
+    │───────────────────────────────────>│
+    │                                    │  validate credentials
+    │                                    │  issue RS256 access + refresh tokens
+    │  { access_token, refresh_token }   │
+    │<───────────────────────────────────│
+    │                                    │
+    │  GET /api/v1/auth/me               │
+    │  Authorization: Bearer <access>    │
+    │───────────────────────────────────>│
+    │                                    │  decode JWT, set frappe.session.user
+    │                                    │  revocation_check: verify active DA RBAC Assignment
+    │                                    │  on_user_profile hook: enrich with DA scope
+    │  { user, roles, profiles: {        │
+    │      da_services: { roles, scope } │
+    │  }}                                │
+    │<───────────────────────────────────│
+    │                                    │
+    │  POST /api/v1/auth/refresh         │
+    │  { refresh_token }                 │
+    │───────────────────────────────────>│
+    │                                    │  rotate: old refresh token invalidated
+    │  { access_token, refresh_token }   │
+    │<───────────────────────────────────│
+    │                                    │
+    │  POST /api/v1/auth/logout          │
+    │  { refresh_token }                 │
+    │───────────────────────────────────>│
+    │                                    │  revoke refresh token (SHA-256 hash deleted)
+    │                                    │  access token remains valid until TTL expires
+    │  { status: "success" }             │
+    │<───────────────────────────────────│
+```
+
+### 6.6 Deny-by-default (revocation check)
+
+Every authenticated request to a DA Services endpoint passes through a `revocation_check`
+callback registered with oan_auth_service's middleware. The check:
+
+1. **Allows** users with unrestricted roles (OAN Administrator, System Manager, Administrator).
+2. **Rejects** users who hold no DA Services role.
+3. **Rejects** users who hold a DA Services role but have no active `DA RBAC Assignment` row
+   (i.e. all assignments are expired, inactive, or missing).
+
+This ensures that a valid JWT alone is not sufficient to access DA Services APIs — the user
+must also have an active assignment in the system.
+
+### 6.7 Verify the setup
+
+```bash
+# Login
+curl -s -X POST http://127.0.0.1:8200/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"usr": "Administrator", "pwd": "admin"}' | python3 -m json.tool
+
+# Use the access_token from the response
+curl -s http://127.0.0.1:8200/api/v1/auth/me \
+  -H "Authorization: Bearer <access_token>" | python3 -m json.tool
+
+# Health check (no auth required)
+curl -s http://127.0.0.1:8200/api/v1/da-services/health | python3 -m json.tool
+```
+
+---
+
+## 7. Troubleshooting
 
 - **`Cwd must be an absolute path`** — you forgot `MSYS_NO_PATHCONV=1` in Git Bash.
 - **`bench` command hangs for many minutes** — check the bench is on the named volume

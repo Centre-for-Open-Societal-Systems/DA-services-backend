@@ -8,9 +8,10 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# Open decision with the team: whether DA Services shares the oan_auth_service Frappe
-# app (as oan_grievance_service does) for OAN IAM / JWT handling. Add it here once agreed.
-# required_apps = ["oan_auth_service"]
+required_apps = ["oan_auth_service"]
+
+# Register Werkzeug REST routes for Frappe API Map
+before_request = ["da_services.api.router.ensure_routes_registered"]
 
 add_to_apps_screen = [
 	{
@@ -247,12 +248,12 @@ has_permission = {
 # 	}
 # ]
 
-# Authentication and authorization
-# --------------------------------
+# Authentication & Profile Resolution
+# -----------------------------------
+# Integrates with oan_auth_service to enrich user introspection (GET /api/v1/auth/me)
+# with DA-specific scope data. Auth itself is handled by oan_auth_service's middleware.
 
-# auth_hooks = [
-# 	"da_services.auth.validate"
-# ]
+on_user_profile = ["da_services.api.v1.profile.resolve_user_profile_hook"]
 
 # Automatically update python controller files with type annotations for this app.
 # export_python_type_annotations = True
