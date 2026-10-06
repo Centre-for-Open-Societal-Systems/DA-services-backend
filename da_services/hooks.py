@@ -13,6 +13,10 @@ required_apps = ["oan_auth_service"]
 # Register Werkzeug REST routes for Frappe API Map
 before_request = ["da_services.api.router.ensure_routes_registered"]
 
+# Denied-access audit rows are queued during the request (the failing transaction is
+# rolled back) and persisted here in their own commit.
+after_request = ["da_services.utils.audit.flush"]
+
 add_to_apps_screen = [
 	{
 		"name": "da_services",
