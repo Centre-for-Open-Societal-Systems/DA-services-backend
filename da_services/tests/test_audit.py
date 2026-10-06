@@ -35,6 +35,8 @@ class TestAudit(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		frappe.db.delete("DA RBAC Assignment")
+		# The table is append-only (no delete permission, on_trash refuses), so test cleanup
+		# goes through SQL; same pattern as test_role_matrix.tearDown.
 		frappe.db.sql("delete from `tabDA Audit Event`")
 		_user(SUP)
 		_user(NO_ROLE)

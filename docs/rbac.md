@@ -20,8 +20,8 @@ through a Supervisor assignment (HLD 3, 10.1). Roles are seeded by
 
 ## Assignment model
 
-`DA RBAC Assignment`: `user`, `role`, `active`, `da_id`, `region_scope`, `woreda_scope`,
-`effective_from`, `effective_to`, `assigned_by`, `notes`.
+`DA RBAC Assignment`: `user`, `role`, `active`, `da_id`, `region_scope`, `zone_scope`,
+`woreda_scope`, `effective_from`, `effective_to`, `assigned_by`, `notes`.
 
 Validation: Supervisor needs a Woreda; Executive needs a Region; Development Agent needs
 a DA-ID; a Woreda needs its Region; `effective_to >= effective_from`. Saving an active

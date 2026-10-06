@@ -22,6 +22,7 @@ def resolve_user_profile_hook(user_doc, roles=None) -> tuple[str, dict | None]:
 		"roles": sorted(da_roles),
 		"scope": {
 			"regions": sorted(ctx.region_scopes),
+			"zones": sorted(ctx.zone_scopes),
 			"woredas": sorted(ctx.woreda_scopes),
 			"da_ids": sorted(ctx.da_ids),
 		},

@@ -153,6 +153,8 @@ class TestMe(_Base):
 		ns, data = profile_api.resolve_user_profile_hook(user_doc=frappe.get_doc("User", SUP))
 		self.assertEqual(ns, "da_services")
 		self.assertEqual(data["scope"]["woredas"], ["ET04-W01"])
+		# same scope shape as GET /da-services/me, so the frontend can use either
+		self.assertEqual(set(data["scope"]), {"regions", "zones", "woredas", "da_ids"})
 		self.assertNotIn("agent", data)  # the hook stays cheap: no registry call
 
 	def test_profile_hook_returns_none_for_outsiders(self):
