@@ -13,6 +13,11 @@ Appendix A), Part 1 HLD (sections 5, 7, 9, 10.3), DA Services Part 2 brief (sect
 
 ---
 
+> **Revision 6 Oct 2026.** Field names and enums were checked against the UI prototype source
+> (`DA-registry-frontend`, see `docs/api-da-screens.md`). Additions from that pass are marked
+> *(UI)*. Phase 1 freeze for the DA dashboard, farmers and visits screens: inventory rows
+> 3, 4, 5, 7, 8, 9, 10, 13, 16 (nine doctype groups).
+
 ## 1. Principles
 
 1. **One authoritative owner per fact** (HLD 2.2). DA identity and posting live in the
@@ -65,9 +70,10 @@ Phases follow the Part 2 brief order adapted to the DA role first.
 | 4 | DA Reference Value | Reference | 2 | Services (config) |
 | 5 | DA Agent Reference | Registry bridge | 2 | **DA Registry** (read-only projection) |
 | 6 | DA Profile Change Request | Registry bridge | 2 | Services (request) → Registry (result) |
+| 6a | DA Farmer Change Request *(UI)* | Registry bridge | 2 | Services (request) → Farmer Registry (result) |
 | 7 | DA Farmer Link | Field | 2 | Services |
 | 8 | DA Farmer Reference | Field | 2 | **Farmer Registry** (read-only projection) |
-| 9 | DA Visit (+ DA Visit Attachment) | Field | 2 | Services |
+| 9 | DA Visit (+ DA Visit Attachment, DA Visit Advisory QA *(UI)*) | Field | 2 | Services |
 | 10 | DA Task | Field | 2 | Services |
 | 11 | DA ODK Submission Link | Field | 2 | ODK Central (state) / Services (correlation) |
 | 12 | DA Beneficiary Segment / DA Beneficiary Classification | Field | 2 | Services |
@@ -75,10 +81,13 @@ Phases follow the Part 2 brief order adapted to the DA role first.
 | 14 | DA Grievance Link | Field | 2 | Grievance Service (case) / Services (link) |
 | 15 | DA Internal Issue (+ child tables) | Field | 2 | Services |
 | 16 | DA Notification | System | 2 | Services |
+| 16a | DA Advisory Note *(UI)* | Field | 2 | Services |
+| 16b | DA Credit Application Link / DA Service Payment *(UI)* | Field | 5 | Credit service / payment gateway (mirror) |
 | 17 | DA Integration Event | System | 2 | Services |
 | 18 | DA Lifecycle Transition | Part 2 | 3 | Services (decision) → Registry (status) |
 | 19 | DA Leave Request / DA Leave Balance | Part 2 | 3 | Services |
-| 20 | DA KPI Definition / DA KPI Evaluation | Part 2 | 4 | Services |
+| 19a | DA Dependent *(UI)* | Part 2 | 3 | Services (Supervisor approves) |
+| 20 | DA KPI Definition / DA KPI Evaluation / DA KPI Record *(UI)* | Part 2 | 4 | Services |
 | 21 | DA Goal (+ assignees) | Part 2 | 4 | Services |
 | 22 | DA Performance Review | Part 2 | 4 | Services |
 | 23 | DA Certificate / DA Training Record | Part 2 | 5 | Services (uploads) / Agrilearn (auto) |
@@ -148,12 +157,19 @@ registry per row (NFR: search p95 ≤ 2 s). Requires decision B1 (integration pa
 | `approval_status` | Select: Draft / Awaiting review / Changes requested / Approved / Published | |
 | `fayda_status` | Select: Verified / Pending / Mismatch | |
 | `joined_on` | Date | years of service |
+| `farmer_count` | Int | *(UI)* My Teams, Assignments tiles; from Farmer Registry link count or registry |
+| `supervisor_name`, `supervisor_title`, `supervisor_phone`, `supervisor_email` | Data | *(UI)* My Teams card; the Woreda supervisor of record |
+| `source` | Select: Bulk import / MoA sync | *(UI)* registry provenance |
+| `moa_publication` | Select: Published / Pending / Failed / Not sent | *(UI)* registry publication state, read-only |
 | `photo_url` | Data | |
 | `registry_version` | Data | optimistic concurrency when pushing outcomes |
 | `last_synced_at`, `stale` | Datetime, Check | `stale` when older than policy |
 
 Permissions: read for Supervisor (scoped by Woreda), Executive (Region), Admin; no
 create/write for anyone (sync writes with `ignore_permissions`).
+
+The `DAReference` dataclass in `integrations/da_registry/schemas.py` must grow the same
+way: `phone`, `specialisation`, `joined_on`, `farmer_count`, `supervisor` *(UI)*.
 
 ### 4.4 DA Profile Change Request
 
@@ -170,6 +186,25 @@ approval before they reach the registry (FSD 3.7).
 | `approver`, `decided_at`, `decision_note` | Link / Datetime / Small Text | |
 | `registry_sync` | Link DA Integration Event | push result |
 | `client_op_id`, `sync_state` | Data / Select | mobile origin |
+
+---
+
+### 4.5 DA Farmer Change Request *(UI)*
+
+Farmer profile → "Request update". The Farmer Registry record is read-only here; the DA
+requests a correction with evidence and the Registry team decides.
+
+| Field | Type | Notes |
+|---|---|---|
+| `farmer_id` | Data, indexed | |
+| `requested_by_da_id`, `requested_by_user` | Data / Link | attribution shown in the modal |
+| `field` | Select: phone / email / kebele / woreda / primary_crop | the editable subset |
+| `current_value`, `new_value` | Data | |
+| `reason` | Small Text | |
+| `attachments` | Table | supporting documents |
+| `state` | Select: Submitted / Accepted / Rejected / Applied | Registry decision |
+| `external_ref`, `decided_at`, `decision_note` | Data / Datetime / Small Text | |
+| `client_op_id`, `sync_state` | | |
 
 ---
 
@@ -197,8 +232,13 @@ Unique: (`da_id`, `farmer_id`) where `relationship_state = Active`.
 ### 5.2 DA Farmer Reference (projection)
 
 Read-only cache of what the My Farmers list and offline visit need: `farmer_id`
-(name), `full_name`, `phone`, `kebele`, `household_size`, `plots_count`, `area_ha`,
-`primary_crop`, `fayda_state`, `registered_on`, `registry_version`, `last_synced_at`.
+(name), `full_name`, `phone`, `email` *(UI)*, `avatar_url` *(UI)*, `kebele`, `woreda`,
+`region` *(UI)*, `household_size`, `plots_count`, `area_ha`, `primary_crop`, `fayda_state`,
+`status_reason` *(UI, hover text for Pending / Flagged)*, `registered_on`,
+`registry_version`, `last_synced_at`, plus two fields maintained by us: `visits_count` and
+`last_visit_at` *(UI, updated on visit submit)* and `flags` (JSON, e.g. `voucher_redeemed_season`)
+*(UI)*. UI status vocabulary: `Verified | Pending | Flagged` on rows, `Enrolling | Inactive`
+also in filters; the projection stores the Farmer Registry's own state and the API maps it.
 Written only by the Farmer Registry adapter. Pending-action chips (Crop survey due,
 Livestock due, Credit in review, Fayda check, No action due) are **derived** from
 tasks/visits/ODK/credit status at read time, not stored (FSD 3.4).
@@ -215,18 +255,36 @@ tasks/visits/ODK/credit status at read time, not stored (FSD 3.4).
 | `purpose` | Data | |
 | `scheduled_at` | Datetime | |
 | `duration_min` | Int | expected |
-| `priority` | Select: Normal / High / Urgent | |
+| `priority` | Select: Low / Medium / High | *(UI)* was Normal / High / Urgent |
+| `priority_reason` | Data | *(UI)* "overdue by 4 days", "due this week", preset from the priority list |
+| `plot_ref` | Data | *(UI)* farmer parcel reference, e.g. BT-0472 |
+| `assigned_by` | Link User | *(UI)* Supervisor who planned the visit for the DA; empty when self-planned |
 | `location_lat`, `location_lng` | Float | from farmer parcel |
 | `source` | Select: Planned / Unplanned / ODK-reported | HLD 6.5 |
 | `physical_status` | Select: Planned / Confirmed / In progress / Physical Visit Complete / Missed / Rescheduled / Cancelled / Superseded | HLD 9.4; FSD 3.6 |
+| `farmer_confirmation` | Select: Unknown / Confirmed / Tentative / Declined | *(UI)* Today's visits chips |
+| `confirmation_note` | Data | *(UI)* "prefers morning", "reconfirm by SMS" |
+| `arrived_at`, `farmer_present` | Datetime / Check | *(UI)* Start visit check-in |
 | `started_at`, `completed_at` | Datetime | DA's physical closure |
-| `outcome` | Small Text | |
+| `reschedule_reason` | Select: Farmer unavailable / Weather or road access / Agent schedule conflict / Inputs not yet delivered / Other | *(UI)* set on the superseded visit |
+| `outcome` | Small Text | one-line summary shown in lists |
+| `farmer_response` | Small Text | *(UI)* "Understood — will apply" |
+| `observed` | Text | *(UI)* what was observed |
 | `advice_given` | Text | |
+| `inputs_actions` | Small Text | *(UI)* inputs / actions logged |
+| `next_action_type` | Select: None / Follow-up visit / Task | *(UI)* free text in the mock; split so the follow-up can be created |
+| `next_action_note`, `next_action_date` | Data / Date | *(UI)* |
+| `outcome_submitted_at` | Datetime | *(UI)* "Submit visit report" |
 | `gps_lat`, `gps_lng`, `gps_accuracy_m`, `gps_captured_at` | Float / Float / Float / Datetime | FR-05b-iv fix before survey |
 | `notify_farmer_sms` | Check | plan dialog option |
 | `rescheduled_from` | Link DA Visit | |
 | `attachments` | Table DA Visit Attachment | `file`, `kind` (Crop / Land / Animal / Document), `content_hash`, `captured_at`, `sync_state` |
+| `advisory_qa` | Table DA Visit Advisory QA | *(UI)* `question`, `answer`; Advisory visits only, shown on the farmer's Advisory tab |
 | `client_op_id`, `device_id`, `sync_state` | | |
+
+UI status mapping *(UI)*: list `Planned | Confirmed | Completed | Missed` and planner
+`scheduled | completed | overdue` are derived from `physical_status` + `scheduled_at` +
+`farmer_confirmation`; they are not stored.
 
 Performance counting (HLD 9.4): a visit counts only when `physical_status = Physical
 Visit Complete` **and** any required survey link is `Complete`.
@@ -257,7 +315,7 @@ system-generated from rules (survey due, report due, follow-up); some manual.
 | Field | Type | Notes |
 |---|---|---|
 | `da_id` | Data, indexed | |
-| `task_type` | Select: Survey due / Report due / Follow-up / Fayda check / Credit review / Custom | |
+| `task_type` | Select: Survey due / Report due / Follow-up / Fayda check / Credit review / Visit prep / Custom | *(UI)* Visit prep added |
 | `title`, `description` | Data / Small Text | |
 | `farmer_id`, `visit` | Data / Link | optional |
 | `due_at` | Datetime | |
@@ -310,6 +368,9 @@ Rule: a rule run may not set `active=1` on a row with `previously_removed=1`.
 | `state` | Select: Queued / Uploading / Accepted / Validated / Rejected / Conflict / Retryable failure / Dead letter | HLD 9.1 |
 | `attempts`, `last_error` | Int / Small Text | |
 | `correlation_id` | Data | |
+| `base_version` | Data | *(UI)* server version the device edit was based on; conflict when it differs from the current one |
+| `size_bytes` | Int | *(UI)* shown in the queue |
+| `external_push_state` | Select: Not needed / Pending / Deferred / Pushed / Failed | *(UI)* "Held until Land Registry API", "Grievance timeout" are separate from the intake state |
 
 **DA Sync Conflict**
 
@@ -330,8 +391,10 @@ Rule: a rule run may not set `active=1` on a row with `previously_removed=1`.
 | `da_id`, `farmer_id` | Data | |
 | `raised_for` | Select: Self / Farmer | |
 | `external_case_id` | Data, indexed | from Grievance Service |
-| `category`, `subject`, `priority` | Data | snapshot at raise time |
-| `status_mirror` | Data | mapped external status |
+| `category` | Select: Inputs / Schemes / Payments / Markets / Extension / Land | *(UI)* |
+| `subject` | Data | snapshot at raise time |
+| `priority` | Select: Low / Medium / High / Critical | *(UI)* |
+| `status_mirror` | Data | external status; UI values: Pending Submit / Submitted / More Info Needed / Assigned / In Progress / Under Review / Resolved / Rejected / Pending Submitter / Closed *(UI)* |
 | `last_status_at` | Datetime | |
 | `api_sync_state` | Select: Queued / Submitted / Failed / Dead letter | |
 | `submission_payload` | JSON | kept until submitted |
@@ -350,16 +413,16 @@ FSD 3.13.
 | `name` | `DA-ISS-{YYYY}-{#######}` | |
 | `reporter_da_id`, `reporter_user` | Data / Link | |
 | `woreda` | Data | routing to the Supervisor queue |
-| `category` | Select: Equipment / Payment-incentive / Safety / Data-system / Operational | |
+| `category` | Select: Operational / Equipment-supplies / Payment-incentive / Safety / Data-system / HR | *(UI)* HR added |
 | `severity` | Select: Low / Medium / High | |
 | `subject`, `description` | Data / Text | |
-| `related_kebele`, `related_farmer_id` | Data | optional |
+| `related_type`, `related_id` | Select: None / Kebele / Farmer / Visit, Data | *(UI)* "Related to" dropdown |
 | `attachments` | Table | |
 | `status` | Select: Draft / Queued / Submitted / New / In Review / Assigned / In Progress / Resolved / Closed / Rejected / Needs more info / Reopened | FSD 3.13 |
 | `assignee` | Link User | |
 | `priority` | Select | |
 | `sla_due` | Datetime | from severity via DA Reference Value meta |
-| `request_info_notes` | Table (note, by, at) | |
+| `history` | Table (at, by, text) | *(UI)* assign / request info / resolve / reopen notes, shown in the queue modal |
 | `resolution_note` | Text | |
 | `reopened_count` | Int | |
 | `sync_state` | | Sync-failed auto-retry |
@@ -377,6 +440,37 @@ Native Frappe Workflow drives `status` (same approach as the Grievance app).
 | `reference_doctype`, `reference_name` | Data |
 | `read`, `read_at` | Check / Datetime |
 | `sent_at`, `delivery_status`, `provider_ref` | Datetime / Select / Data |
+| `kind` | Select: Onboarding / Assignment / Sync / Grievance / Broadcast / Issue / Visit / Task | *(UI)* icon + grouping |
+| `href` | Data | *(UI)* where the row navigates |
+
+### 5.11 DA Advisory Note *(UI)*
+
+Farmer profile → Advisory tab. Free-text advice attributed to a DA, optionally tied to a visit.
+
+| Field | Type | Notes |
+|---|---|---|
+| `farmer_id` | Data, indexed | |
+| `author_da_id`, `author_user` | Data / Link | |
+| `visit` | Link DA Visit | optional |
+| `text` | Text | |
+| `noted_at` | Datetime | |
+| `client_op_id`, `sync_state` | | |
+
+### 5.12 DA Credit Application Link and DA Service Payment *(UI, phase 5)*
+
+Farmer services screen. Both mirror external systems and hold no money.
+
+**DA Credit Application Link**: `farmer_id`, `da_id`, `lender`, `product` (Seasonal input
+loan / Livestock working capital / Irrigation equipment), `amount_etb`, `tenure_months` (6 /
+12 / 18 / 24), `purpose`, `documents` (Table), `external_ref`, `stage` (Submitted / Document
+review / Credit assessment / Final approval / Disbursement), `stage_history` (Table: stage,
+at, actor), `consent_ref`, `api_sync_state`, `client_op_id`. Requires the farmer's Fayda state
+Verified and an active consent for the lender.
+
+**DA Service Payment**: `farmer_id`, `da_id`, `service` (catalogue item), `category`,
+`provider`, `service_date`, `payee`, `amount_etb`, `method` (Mobile money / Bank transfer /
+Cash receipted), `notes`, `gateway_state` (Draft / Queued / Sent / Confirmed / Failed),
+`gateway_ref`, `client_op_id`.
 
 ---
 
@@ -468,6 +562,14 @@ Warning when a DA's goal weights exceed 100%.
 History events (Coaching / Recognition) as `DA Review Event` child or separate small
 doctype: `da_id`, `event_type`, `note`, `by`, `at`.
 
+**DA KPI Record** *(UI, KPI entry form and bulk import)*: `period` (e.g. 2026-Q3), `da_id`,
+`woreda`, `kebele`, `visits`, `farmer_cases`, `needs_identified`, `support_actions`,
+`reviews`, `training_pct`, `quality_pct`, `notes`, `source` (Manual / Import), `entered_by`,
+`import_batch`. Unique per `period` + `da_id`. **DA KPI Tier Settings** (single): the T1–T4
+thresholds (`t1_quality`, `t1_visits`, `t1_training`, `t2_quality`, `t2_visits`,
+`t2_training`, `t3_quality`, `t4_training`), editable by Admin only. Tier per DA per period
+is computed, not stored, except as a snapshot on the evaluation.
+
 ### 6.5 Certificates, training, incentives, advisors
 
 **DA Certificate**: `da_id`, `title`, `issuing_org`, `cert_type` (Academic degree /
@@ -486,6 +588,11 @@ tier only when Verified or Agrilearn-auto (FSD FR-07b).
 `source`, `reviewed_by`, `approved_by`, `status` (Draft / Reviewed / Approved / Paid
 externally). No payment processing here.
 
+**DA Dependent** *(UI, profile)*: `da_id`, `full_name`, `relationship` (Spouse / Son /
+Daughter / Parent / Sibling / Other), `date_of_birth`, `approval_state` (Pending approval /
+Verified / Rejected), `approved_by`, `approved_at`. Follows the approval workflow pattern
+(6.1); the Supervisor queue shows it under kind "Profile change".
+
 **DA Advisor**: `advisor_id` (name), `full_name`, `expertise_area`, `moa_unit`,
 `region`, `woreda`, `phone`, `email`, `status` (Active / On-leave / Inactive). Reference
 directory only; create/edit/delete for Admin and Supervisor.
@@ -494,25 +601,35 @@ directory only; create/edit/delete for Admin and Supervisor.
 
 ## 7. Communication and surveys
 
-**DA Knowledge Article**: `title_en/_am`, `body_en/_am`, `category`, `language_codes`,
-`version`, `status` (Draft / Published / Archived), `published_at`, `author`.
+**DA Knowledge Article**: `title_en/_am`, `summary_en/_am` *(UI)*, `body_en/_am`,
+`snippet_en/_am` *(UI, SMS-ready, ≤ 160 chars)*, `category` (Crop production / Livestock /
+Soil & water / Pest & disease / Markets & credit / Advisory) *(UI)*, `language_codes`,
+`version`, `status` (Draft / Published / Archived), `published_at`, `author`, `sends`
+(Int, maintained from dispatches) *(UI)*. **DA Knowledge Video** *(UI)*: `title`,
+`category`, `summary`, `url`, `image`, `image_credit`.
 **DA Knowledge Dispatch**: `article`, `sent_by`, `da_id`, `recipients` (JSON farmer ids
 or segment), `channel` (SMS / Telegram), `sent_at`, `delivery_status`, `provider_ref`.
 
-**DA Alert Signal**: `signal_type` (Knowledge / Emergency / Weather / Informational),
-`source`, `title`, `payload` (JSON), `received_at`, `status` (New / Dismissed /
-Dispatched), `broadcast` (Link).
+**DA Alert Signal**: `signal_type` (Knowledge / Emergency / Weather / Informational /
+Grievance) *(UI)*, `severity` (Info / Warning / Critical) *(UI)*, `source`, `title`,
+`detail`, `payload` (JSON), `received_at`, `status` (New / Dismissed / Dispatched),
+`broadcast` (Link).
 
 **DA Broadcast Message**: `signal` (Link), `body_en`, `body_am`, `sms_preview`,
-`channels` (Table: channel), `audience_type` (DAs / Farmer segment / Cooperative),
+`channels` (Table: channel SMS / Telegram), `audience_type` (DAs in Woreda / My linked
+farmers / Farmers in Kebele / Farmer segment / Cooperative) *(UI)*,
 `audience_filter` (JSON), `audience_snapshot_count`, `dispatched_by`, `dispatched_at`,
 `delivery_status`, `receipts` (Table: channel, recipients, delivered, failed,
-provider_ref, at).
+provider_ref, at), `evidence` (Table attachments) *(UI)*. A Development Agent may dispatch
+only to *My linked farmers* or own Kebele, and only an article's approved snippet; free-text
+broadcasts stay with Communications Officer / Admin *(UI finding)*.
 
 **D28 survey** (FSD 3.9): `DA Survey Template` (`version`, `status`, `languages`,
 `consent_required`, `approved_by`), `DA Survey Parameter` (child: `order`, `prompt_en/_am`,
 `response_type` Consent / Auto-filled / Lookup / Rating 1–5 / Single choice /
-Multi-select / Long text, `required`, `options`, `skip_condition`, `prefill_source`),
+Multi-select / Long text (UI codes `consent | auto | lookup | rating | single | multi | text`),
+`required`, `options`, `helper`, `skip_condition` (`{parameter_id, equals}`), `prefill_source`
+(Farmer Registry / DA assignment)),
 `DA Survey Deployment` (`template`, `version`, `agents`/`kebeles`, `window_from/to`,
 `status`), `DA Survey Response` (`deployment`, `collector_da_id`, `farmer_id`,
 `consent`, `answers` JSON, `captured_at`, `sync_state`, `duplicate_guard_key` unique =
@@ -661,13 +778,17 @@ and the service-layer `require_da_access` rule (`docs/rbac.md`).
 |---|---|---|
 | 2a | DA Administrative Area, DA Reference Value, DA Integration Event, DA Notification | – |
 | 2b | DA Agent Reference, DA Profile Change Request | Registry integration decision (B1) |
-| 2c | DA Farmer Link, DA Farmer Reference, DA Visit (+attachment), DA Task | Farmer Registry contract (mock first) |
+| 2c | DA Farmer Link, DA Farmer Reference, DA Visit (+attachment, advisory QA), DA Task, DA Advisory Note | Farmer Registry contract (mock first) |
 | 2d | DA Device Sync Operation, DA Sync Conflict | 2c |
-| 2e | DA ODK Submission Link, DA Beneficiary Segment/Classification, DA Grievance Link, DA Internal Issue | 2c; ODK/Grievance contracts (mock first) |
-| 3 | Approval workflow pattern; DA Lifecycle Transition; DA Leave Request/Balance | 2b (status push-back) |
-| 4 | DA KPI Definition/Evaluation, DA Goal, DA Performance Review | 2c (visit data) |
-| 5 | DA Certificate, DA Training Record, DA Incentive Eligibility | 2b |
-| 6 | DA Advisor, Knowledge, Alert, Broadcast, D28 Survey | – |
+| 2e | DA ODK Submission Link, DA Beneficiary Segment/Classification, DA Grievance Link, DA Internal Issue, DA Farmer Change Request | 2c; ODK/Grievance contracts (mock first) |
+| 3 | Approval workflow pattern; DA Lifecycle Transition; DA Leave Request/Balance; DA Dependent | 2b (status push-back) |
+| 4 | DA KPI Definition/Evaluation/Record, KPI Tier Settings, DA Goal, DA Performance Review | 2c (visit data) |
+| 5 | DA Certificate, DA Training Record, DA Incentive Eligibility, DA Credit Application Link, DA Service Payment | 2b; Credit / gateway contracts |
+| 6 | DA Advisor, Knowledge (+ Video), Alert, Broadcast, D28 Survey | – |
+
+**Phase 1 freeze (DA dashboard, farmers, visits):** 2a without Integration Event, 2b Agent
+Reference only, 2c, 2d. Nine doctype groups; everything else waits for the review of this
+document.
 
 ---
 
@@ -687,3 +808,11 @@ and the service-layer `require_da_access` rule (`docs/rbac.md`).
 12. **KPI set**: the approved five KPIs behind 30/25/20/15/10 and the Data Accuracy KPI formula inputs.
 13. **Attachments**: storage (Frappe private files vs object storage), retention and anonymisation rules for photos/GPS (ATI/MoA policy).
 14. **Route prefix**: `/api/v1/da-services/` agreed with Pushkar; API doc to follow this model.
+15. **Priority list source** *(UI)*: which system raises "Armyworm infestation" style alerts for the planner (Agrilearn, ODK survey result, plant-health signal, Supervisor flag)?
+16. **Voucher flag** *(UI)*: "Input voucher redeemed this season" comes from which system?
+17. **Credit service, Land Registry, payment gateway** *(UI)*: no contracts; accept and hold device captures, or hide the actions until contracts exist?
+18. **Farmer visit confirmation** *(UI)*: entered by the DA, or from an inbound SMS reply (needs a webhook)?
+19. **Weekly crop report** *(UI)*: the ODK crop survey or a separate DA report form?
+20. **DA broadcast** *(UI)*: may a DA dispatch snippets to own linked farmers (prototype allows it; FSD gives broadcast to Communications Officer)?
+21. **Who edits beneficiary segment rules and KPI tier thresholds** *(UI)*: prototype says Supervisor/Admin for segments, Admin for tiers.
+22. **Supervisor-assigned visits** (`assigned_by`) *(UI)*: in scope for phase 1?
