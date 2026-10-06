@@ -25,6 +25,11 @@ _REGISTRATION_LOCK = threading.Lock()
 
 root_route = prefixed("/api/v1")
 
+# Every DA Services endpoint hangs off this prefix (agreed in PR #4: several DA
+# services may share the gateway). The auth app keeps /api/v1/auth/* for itself.
+PREFIX = "/api/v1/da-services"
+route = prefixed(PREFIX)
+
 
 @root_route("/da-services/health", methods=("GET",), allow_guest=True, summary="DA Services health check")
 @frappe.whitelist(allow_guest=True)
@@ -60,6 +65,9 @@ def _register() -> None:
 	from da_services.api.middleware import check_da_assignment
 
 	ensure_auth_routes()
+
+	# Importing the endpoint modules executes their @route(...) registrations.
+	from da_services.api.v1 import da, me, rbac
 
 	for rule in _rules:
 		if rule not in frappe.api.API_URL_MAP._rules:
