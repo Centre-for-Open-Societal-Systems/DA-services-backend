@@ -5,7 +5,7 @@ Two surfaces share one implementation:
 - ``GET /api/v1/da/me`` returns the caller's DA Services profile: roles, Region/Woreda
   scope, bound DA-ID, the DA record from the registry (for a Development Agent) and
   the sidebar sections the role may see.
-- ``on_user_profile`` hook: oan_auth_service's ``GET /api/v1/me`` collects the same
+- ``on_user_profile`` hook: oan_auth_service's ``GET /api/v1/auth/me`` collects the same
   profile under ``data.profiles.da_services`` so the UI shell needs one call after login.
 
 The menu is a convenience for the UI, not an authorisation control: every endpoint

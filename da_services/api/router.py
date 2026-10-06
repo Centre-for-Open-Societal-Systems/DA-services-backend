@@ -19,7 +19,7 @@ from oan_auth_service.api.router import ensure_routes_registered as ensure_auth_
 from oan_auth_service.api.utils import handle_api_errors, success_response
 
 # Every DA Services route hangs off this prefix. The auth app keeps /api/v1/auth/*
-# and /api/v1/me for itself.
+# and /api/v1/auth/me for itself.
 PREFIX = "/api/v1/da"
 route = prefixed(PREFIX)
 

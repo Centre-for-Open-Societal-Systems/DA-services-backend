@@ -54,7 +54,7 @@ Login, refresh, logout and password reset come from the shared `oan_auth_service
 - `/api/method/da_services.*` (the RPC form of the same functions)
 
 On each request the token's `sub` becomes the session user; our scope context is then
-built from that user's assignments. `GET /api/v1/me` (auth app) includes our profile
+built from that user's assignments. `GET /api/v1/auth/me` (auth app) includes our profile
 under `data.profiles.da_services`; `GET /api/v1/da/me` returns the full profile with the
 DA record and the permitted menu.
 

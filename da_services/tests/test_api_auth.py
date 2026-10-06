@@ -80,6 +80,8 @@ class TestRoutes(_Base):
 			self.assertIn(expected, paths)
 		# The auth app's own routes are there too, so login works on this site.
 		self.assertIn("/api/v1/auth/login", paths)
+		self.assertIn("/api/v1/auth/me", paths)
+		self.assertNotIn("/api/v1/me", paths)  # develop moved it under /auth
 
 	def test_health_is_guest_accessible(self):
 		frappe.set_user("Guest")
