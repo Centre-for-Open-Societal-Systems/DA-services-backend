@@ -164,23 +164,13 @@ has_permission = {
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"da_services.tasks.all"
-# 	],
-# 	"daily": [
-# 		"da_services.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"da_services.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"da_services.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"da_services.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"cron": {
+		"*/5 * * * *": [
+			"da_services.integrations.grievance.queue.process_pending",
+		],
+	},
+}
 
 # Testing
 # -------
