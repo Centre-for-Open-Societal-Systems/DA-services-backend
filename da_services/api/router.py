@@ -63,6 +63,7 @@ def _register() -> None:
 
 	from da_services.api import middleware
 	from da_services.api.middleware import check_da_assignment
+	from da_services.api.v1 import grievance  # register Werkzeug routes
 
 	ensure_auth_routes()
 
