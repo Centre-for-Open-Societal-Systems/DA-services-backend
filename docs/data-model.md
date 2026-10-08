@@ -661,6 +661,27 @@ One row per outbound command or inbound event to/from an external system.
 Processed by Frappe background jobs with retry policy and dead-letter after N attempts;
 Admin sees failures in a queue (Appendix A: sync failure → Administrator, portal).
 
+**Reconciliation with PR #6 (DA-178, grievance adapter, in review).** That PR proposes a first
+`DA Integration Event` with a grievance-only subset: `event_type` (Grievance Submit / Action /
+Note / Reassign), `payload`, `reference_id`, `external_reference`, `attempts`, `max_attempts`,
+`next_retry_at`, `completed_at`, `last_error`, statuses Pending / Processing / Completed /
+Failed. This section is the **target** schema because the same queue must carry Farmer
+Registry, ODK, Credit and messaging calls and needs an idempotency key. Mapping and the
+additions requested on PR #6:
+
+| PR #6 (v1) | Target (§8.1) | Note |
+|---|---|---|
+| `event_type` (Select, grievance values) | `integration` (Select) + `operation` (Data) | `event_type` can stay as a free-text alias of `operation` |
+| `reference_id` (free text) | `request_ref` (unique per integration) | carry `client_op_id` from the device; return the existing row on replay |
+| `external_reference` | `external_reference` | same |
+| `payload` (JSON) | `payload_hash` + `payload_ref` (File when large) | keep inline JSON for small payloads |
+| `attempts`, `max_attempts`, `next_retry_at` | `attempts`, `next_retry_at` | `max_attempts` becomes a per-integration setting |
+| `completed_at`, `last_error` | `processed_at`, `error_message` | rename |
+| – | `direction`, `entity_type`, `entity_name`, `correlation_id`, `scheduled_at`, `response_ref` | add |
+| Pending / Processing / Completed / Failed | Pending / Processing / Success / Failed / Retry / Dead letter / Divergent | Completed → Success; retryable failure → Retry; exhausted → Dead letter |
+
+Until PR #6 adopts this, new integrations must not build on the v1 shape.
+
 ### 8.2 DA RBAC Assignment, DA Audit Event
 
 Already built; see `docs/rbac.md`.
