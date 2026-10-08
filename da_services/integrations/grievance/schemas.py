@@ -25,6 +25,8 @@ class GrievanceSubmission:
 	subject: str = ""
 	description: str = ""
 	priority: str = "Medium"
+	raised_for: str = "Self"
+	farmer_id: str | None = None
 	attachments: list[str] = field(default_factory=list)
 
 	def to_dict(self) -> dict:

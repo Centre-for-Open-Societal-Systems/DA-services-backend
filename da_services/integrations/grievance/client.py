@@ -42,6 +42,8 @@ class GrievanceNotFound(GrievanceServiceError):
 class GrievanceServiceUnavailable(GrievanceServiceError):
 	"""Transient: timeout, connection error, 5xx. Callers may retry."""
 
+	http_status_code = 503
+
 
 class GrievanceClient(ABC):
 	@abstractmethod
@@ -52,9 +54,9 @@ class GrievanceClient(ABC):
 	def list_grievances(
 		self,
 		*,
-		region: str | None = None,
-		woreda: str | None = None,
-		complainant_id: str | None = None,
+		region: str | list[str] | None = None,
+		woreda: str | list[str] | None = None,
+		complainant_id: str | list[str] | None = None,
 		status: str | None = None,
 		page: int = 1,
 		page_size: int = 20,
@@ -84,7 +86,13 @@ class HttpGrievanceClient(GrievanceClient):
 		self.timeout = timeout
 
 	def _headers(self) -> dict:
-		token = frappe.request.headers.get("Authorization", "") if frappe.request else ""
+		token = ""
+		if frappe.request:
+			token = frappe.request.headers.get("Authorization", "")
+		if not token:
+			sa_token = frappe.conf.get("grievance_api_token") or ""
+			if sa_token:
+				token = sa_token if sa_token.startswith("Bearer ") else f"Bearer {sa_token}"
 		return {
 			"Authorization": token,
 			"Content-Type": "application/json",
@@ -119,20 +127,22 @@ class HttpGrievanceClient(GrievanceClient):
 	def list_grievances(
 		self,
 		*,
-		region: str | None = None,
-		woreda: str | None = None,
-		complainant_id: str | None = None,
+		region: str | list[str] | None = None,
+		woreda: str | list[str] | None = None,
+		complainant_id: str | list[str] | None = None,
 		status: str | None = None,
 		page: int = 1,
 		page_size: int = 20,
 	) -> tuple[list[GrievanceSummary], int]:
 		params: dict = {"page": page, "page_size": page_size}
 		if region:
-			params["region"] = region
+			params["region"] = ",".join(region) if isinstance(region, list) else region
 		if woreda:
-			params["woreda"] = woreda
+			params["woreda"] = ",".join(woreda) if isinstance(woreda, list) else woreda
 		if complainant_id:
-			params["complainant_id"] = complainant_id
+			params["complainant_id"] = (
+				",".join(complainant_id) if isinstance(complainant_id, list) else complainant_id
+			)
 		if status:
 			params["status"] = status
 		try:

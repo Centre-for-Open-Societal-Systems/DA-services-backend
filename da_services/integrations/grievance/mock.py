@@ -193,20 +193,23 @@ class MockGrievanceClient(GrievanceClient):
 	def list_grievances(
 		self,
 		*,
-		region: str | None = None,
-		woreda: str | None = None,
-		complainant_id: str | None = None,
+		region: str | list[str] | None = None,
+		woreda: str | list[str] | None = None,
+		complainant_id: str | list[str] | None = None,
 		status: str | None = None,
 		page: int = 1,
 		page_size: int = 20,
 	) -> tuple[list[GrievanceSummary], int]:
 		filtered = list(self._records.values())
 		if region:
-			filtered = [r for r in filtered if r.get("region") == region]
+			regions = [region] if isinstance(region, str) else region
+			filtered = [r for r in filtered if r.get("region") in regions]
 		if woreda:
-			filtered = [r for r in filtered if r.get("woreda") == woreda]
+			woredas = [woreda] if isinstance(woreda, str) else woreda
+			filtered = [r for r in filtered if r.get("woreda") in woredas]
 		if complainant_id:
-			filtered = [r for r in filtered if r.get("complainant_id") == complainant_id]
+			ids = [complainant_id] if isinstance(complainant_id, str) else complainant_id
+			filtered = [r for r in filtered if r.get("complainant_id") in ids]
 		if status:
 			filtered = [r for r in filtered if r.get("status") == status]
 

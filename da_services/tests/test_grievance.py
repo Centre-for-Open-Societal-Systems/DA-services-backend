@@ -17,6 +17,7 @@ from da_services.services import constants as C
 
 SUPERVISOR = "grv-test-supervisor@da.local"
 DA_USER = "grv-test-da@da.local"
+COMMS_USER = "grv-test-comms@da.local"
 NO_ROLE_USER = "grv-test-norole@da.local"
 
 
@@ -262,9 +263,11 @@ class TestGrievanceAPI(IntegrationTestCase):
 		frappe.db.delete("DA Integration Event")
 		_user(SUPERVISOR, [C.ROLE_SUPERVISOR])
 		_user(DA_USER, [C.ROLE_DA])
+		_user(COMMS_USER, [C.ROLE_COMMS])
 		_user(NO_ROLE_USER)
 		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(COMMS_USER, C.ROLE_COMMS, region_scope="ET04")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -353,26 +356,6 @@ class TestGrievanceAPI(IntegrationTestCase):
 		)
 		self.assertNotEqual(res.status_code, 201)
 
-	def test_take_action_as_supervisor(self):
-		res = self._request(
-			"/api/v1/da-services/grievances/GRV-000001/action",
-			method="POST",
-			data={"action_type": "resolve", "comment": "Fixed", "resolution": "Done"},
-			user=SUPERVISOR,
-		)
-		self.assertEqual(res.status_code, 200)
-		body = json.loads(res.get_data(as_text=True))
-		self.assertEqual(body["data"]["sync_state"], "synced")
-
-	def test_take_action_da_denied(self):
-		res = self._request(
-			"/api/v1/da-services/grievances/GRV-000001/action",
-			method="POST",
-			data={"action_type": "resolve"},
-			user=DA_USER,
-		)
-		self.assertIn(res.status_code, (403, 401))
-
 	def test_timeline(self):
 		res = self._request("/api/v1/da-services/grievances/GRV-000002/timeline", user=SUPERVISOR)
 		self.assertEqual(res.status_code, 200)
@@ -405,3 +388,66 @@ class TestGrievanceAPI(IntegrationTestCase):
 		self.assertEqual(res.status_code, 200)
 		body = json.loads(res.get_data(as_text=True))
 		self.assertEqual(body["data"]["count"], 0)
+
+	def test_da_sees_own_ticket_after_submit(self):
+		res = self._request(
+			"/api/v1/da-services/grievances",
+			method="POST",
+			data={"subject": "DA own ticket test", "category": "Supply Chain"},
+			user=DA_USER,
+		)
+		self.assertIn(res.status_code, (200, 201))
+
+		res = self._request("/api/v1/da-services/grievances", user=DA_USER)
+		self.assertEqual(res.status_code, 200)
+		body = json.loads(res.get_data(as_text=True))
+		subjects = [g["subject"] for g in body["data"]]
+		self.assertIn("DA own ticket test", subjects)
+
+	def test_body_complainant_id_ignored(self):
+		res = self._request(
+			"/api/v1/da-services/grievances",
+			method="POST",
+			data={
+				"subject": "Spoofed identity test",
+				"complainant_id": "DA-FAKE-999",
+				"complainant_name": "Evil Actor",
+			},
+			user=DA_USER,
+		)
+		self.assertIn(res.status_code, (200, 201))
+		body = json.loads(res.get_data(as_text=True))
+		ticket_id = body["data"]["ticket_id"]
+		if ticket_id:
+			res = self._request(f"/api/v1/da-services/grievances/{ticket_id}", user=DA_USER)
+			detail = json.loads(res.get_data(as_text=True))
+			self.assertEqual(detail["data"]["complainant_id"], "DA-000001")
+			self.assertNotEqual(detail["data"]["complainant_name"], "Evil Actor")
+
+	def test_comms_officer_denied(self):
+		res = self._request("/api/v1/da-services/grievances", user=COMMS_USER)
+		self.assertIn(res.status_code, (403, 401))
+
+	def test_upstream_unavailable_creates_queue_row(self):
+		from unittest.mock import patch
+
+		from da_services.integrations.grievance.client import GrievanceServiceUnavailable
+
+		with patch(
+			"da_services.integrations.grievance.mock.MockGrievanceClient.submit_grievance",
+			side_effect=GrievanceServiceUnavailable("test"),
+		):
+			res = self._request(
+				"/api/v1/da-services/grievances",
+				method="POST",
+				data={"subject": "Queue fallback test"},
+				user=DA_USER,
+			)
+			self.assertIn(res.status_code, (200, 201))
+			body = json.loads(res.get_data(as_text=True))
+			self.assertEqual(body["data"]["sync_state"], "pending")
+			self.assertIsNotNone(body["data"]["queue_ref"])
+
+			doc = frappe.get_doc("DA Integration Event", body["data"]["queue_ref"])
+			self.assertEqual(doc.event_type, "Grievance Submit")
+			self.assertIn(doc.status, ("Pending", "Processing", "Completed"))

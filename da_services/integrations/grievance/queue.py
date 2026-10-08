@@ -21,6 +21,7 @@ from .schemas import GrievanceAction, GrievanceSubmission
 
 BACKOFF_BASE_SECONDS = 60
 MAX_BACKOFF_SECONDS = 3600
+STALE_PROCESSING_MINUTES = 10
 
 
 def _backoff_seconds(attempt: int) -> int:
@@ -47,7 +48,6 @@ def enqueue_event(
 		}
 	)
 	doc.insert(ignore_permissions=True)
-	frappe.db.commit()
 
 	frappe.enqueue(
 		"da_services.integrations.grievance.queue.process_single",
@@ -111,8 +111,11 @@ def _handle_failure(doc, exc: Exception, retryable: bool = True) -> None:
 
 
 def process_pending() -> None:
-	"""Scheduler entry point: sweep all retryable rows whose next_retry_at has passed."""
+	"""Scheduler entry point: sweep retryable rows and recover stale Processing rows."""
 	now = now_datetime()
+
+	_recover_stale_processing(now)
+
 	events = frappe.get_all(
 		"DA Integration Event",
 		filters={
@@ -131,6 +134,32 @@ def process_pending() -> None:
 				f"Failed to process integration event {row.name}",
 				"DA Integration Queue",
 			)
+
+
+def _recover_stale_processing(now) -> None:
+	"""Reset rows stuck in Processing for longer than STALE_PROCESSING_MINUTES.
+
+	This handles the case where the server crashed mid-processing — the row would
+	otherwise be orphaned forever since the scheduler only sweeps Pending rows.
+	"""
+	cutoff = now - timedelta(minutes=STALE_PROCESSING_MINUTES)
+	stale = frappe.get_all(
+		"DA Integration Event",
+		filters={
+			"status": "Processing",
+			"modified": ("<=", cutoff),
+		},
+		fields=["name"],
+	)
+	for row in stale:
+		frappe.db.set_value(
+			"DA Integration Event",
+			row.name,
+			{"status": "Pending", "next_retry_at": now},
+			update_modified=True,
+		)
+	if stale:
+		frappe.db.commit()
 
 
 def retry_failed(event_name: str | None = None) -> list[str]:
