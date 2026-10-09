@@ -144,11 +144,13 @@ after_migrate = "da_services.setup.install.after_migrate"
 permission_query_conditions = {
 	"DA RBAC Assignment": "da_services.permissions.rbac_assignment_query_conditions",
 	"DA Task": "da_services.permissions.da_task_query_conditions",
+	"DA Visit": "da_services.permissions.da_visit_query_conditions",
 }
 
 has_permission = {
 	"DA RBAC Assignment": "da_services.permissions.has_rbac_assignment_permission",
 	"DA Task": "da_services.permissions.has_da_task_permission",
+	"DA Visit": "da_services.permissions.has_da_visit_permission",
 }
 
 # Document Events
