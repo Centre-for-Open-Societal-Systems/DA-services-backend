@@ -30,9 +30,17 @@ def after_migrate():
 
 
 def seed_roles():
-	"""Create the five DA Services roles if missing. Existing roles are left untouched."""
+	"""Create the five DA Services roles if missing and enforce their Desk access.
+
+	Another app on the bench may have created a role with the same name first
+	(oan_auth_service seeds roles too, with Frappe's default desk_access = 1), so the
+	spec-defined desk_access is applied to existing rows as well; nothing else on an
+	existing role is touched.
+	"""
 	for role_name, desk_access in ROLES:
 		if frappe.db.exists("Role", role_name):
+			if frappe.db.get_value("Role", role_name, "desk_access") != desk_access:
+				frappe.db.set_value("Role", role_name, "desk_access", desk_access, update_modified=False)
 			continue
 		role = frappe.new_doc("Role")
 		role.role_name = role_name
