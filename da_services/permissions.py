@@ -75,6 +75,21 @@ def da_visit_query_conditions(user: str | None = None) -> str:
 	return da_scoped_query_conditions("DA Visit", user)
 
 
+def da_notification_query_conditions(user: str | None = None) -> str:
+	"""Everyone sees only their own notifications; administrators see all."""
+	user = user or frappe.session.user
+	if _is_unrestricted(user):
+		return ""
+	return "`tabDA Notification`.`user` = {user}".format(user=frappe.db.escape(user))
+
+
+def has_da_notification_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	user = user or frappe.session.user
+	if _is_unrestricted(user):
+		return True
+	return doc.user == user and ptype in ("read", "write")
+
+
 def has_da_visit_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
 	return has_da_scoped_permission(doc, ptype, user)
 

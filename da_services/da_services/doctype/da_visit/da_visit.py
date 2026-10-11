@@ -229,6 +229,18 @@ class DAVisit(Document):
 		)
 		task.insert(ignore_permissions=True)
 		self.db_set("follow_up_task", task.name, update_modified=False)
+		from da_services.services.notifications import notify_da
+
+		notify_da(
+			self.da_id,
+			kind="Task",
+			title=_("Follow-up task created: {0}").format(task.title)[:140],
+			body=self.next_action_note,
+			href=f"/tasks/{task.name}",
+			event="task_created",
+			reference_doctype="DA Task",
+			reference_name=task.name,
+		)
 		if self.next_action_type == "Follow-up visit":
 			visit = frappe.get_doc(
 				{
