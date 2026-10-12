@@ -119,7 +119,7 @@ class TestRoleMatrix(IntegrationTestCase):
 		self._denied(rbac_api.create_assignment(user=OTHER_DA, role=C.ROLE_DA, da_id="DA-000009"))
 		self._denied(rbac_api.list_assignments())
 		self.assertFalse(frappe.has_permission("DA RBAC Assignment", "write", user=USERS[C.ROLE_EXECUTIVE]))
-		self.assertNotIn("approvals", me_api.get_me()["data"]["menu"])
+		self.assertNotIn("/approvals", me_api.get_me()["data"]["menu"])
 
 	# --- Communications Officer --------------------------------------------------
 
@@ -130,9 +130,9 @@ class TestRoleMatrix(IntegrationTestCase):
 		self._denied(rbac_api.list_assignments())
 		self.assertFalse(frappe.has_permission("DA RBAC Assignment", "read", user=USERS[C.ROLE_COMMS]))
 		menu = me_api.get_me()["data"]["menu"]
-		for forbidden in ("agents", "approvals", "assignments", "farmers"):
+		for forbidden in ("/agents", "/approvals", "/assignments", "/farmers"):
 			self.assertNotIn(forbidden, menu)
-		self.assertIn("broadcast", menu)
+		self.assertIn("/broadcast", menu)
 
 	# --- Administrator -----------------------------------------------------------
 

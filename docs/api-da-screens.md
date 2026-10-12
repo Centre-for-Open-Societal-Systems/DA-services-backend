@@ -294,7 +294,7 @@ linkedAt}`; actions `link(farmerIds[], segmentId)` → `{added[], skipped[]}`, `
 | Team table: `fullName, daId, kebele, specialisation, educationTier, farmerCount, activeStatus, phone, joinedAt` (same Woreda, not Separated, me first) | same → `members[]` | Registry projection (DA Agent Reference) |
 
 Read-only; no row links. Requires the Registry projection to carry `phone`, `specialisation`, `joined_at`,
-`farmer_count` (our `DAReference` lacks them today, see §3).
+`farmer_count` (added to `DAReference` in DA-197; mock values until the registry contract lands).
 
 ### 2.13 Internal Feedback (`/feedback`, tabs Report an issue · Issue queue)
 
