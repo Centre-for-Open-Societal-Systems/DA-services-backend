@@ -21,6 +21,10 @@ on the visit; the SMS itself needs the gateway (not yet available) and is sent b
 later job, never from this request. `location` comes from the client (the farmer's
 parcel, once the Farmer Registry API exists) and is stored as given.
 
+Datetimes: every `*_at` value is site-local time (System Settings time zone, Africa/Addis_Ababa
+in production) serialised as ISO 8601 without an offset, the Frappe convention; `date` and
+`time` in the plan form are read the same way. Clients must not apply a UTC offset.
+
 Scope is enforced in services/visits.py: a DA acts on their own DA-ID, a Supervisor on
 DAs in their Woreda (recorded as `assigned_by`), an Executive reads their Region.
 """
@@ -31,6 +35,7 @@ import json
 
 import frappe
 from frappe import _
+from frappe.rate_limiter import rate_limit
 from frappe.utils import get_datetime
 from oan_auth_service.api.utils import handle_api_errors, success_response
 
@@ -259,6 +264,7 @@ def submit(visit_id: str, **kwargs):
 
 @route("/visits/<visit_id>/attachments", methods=("POST",), status=201, summary="Upload geo-tagged evidence")
 @frappe.whitelist(methods=["POST"])
+@rate_limit(limit=60, seconds=60)  # per IP; a DA uploads a handful per visit
 @handle_api_errors
 def add_attachment(visit_id: str, **kwargs):
 	ctx = require_roles(*svc.WRITE_ROLES)
@@ -286,6 +292,7 @@ def add_attachment(visit_id: str, **kwargs):
 
 @route("/reports/activity", methods=("GET",), summary="Weekly activity report")
 @frappe.whitelist()
+@rate_limit(limit=120, seconds=60)
 @handle_api_errors
 def activity_report(**kwargs):
 	ctx = require_roles(*svc.READ_ROLES)

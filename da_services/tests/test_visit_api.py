@@ -43,6 +43,26 @@ def _png(color: str) -> bytes:
 	return buf.getvalue()
 
 
+def _pdf() -> bytes:
+	"""A minimal but valid one-page PDF with a correct xref (Frappe parses PDFs with pypdf)."""
+	objs = [
+		b"<</Type/Catalog/Pages 2 0 R>>",
+		b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+		b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>",
+	]
+	out = bytearray(b"%PDF-1.4\n")
+	offsets = []
+	for i, body in enumerate(objs, start=1):
+		offsets.append(len(out))
+		out += b"%d 0 obj\n%s\nendobj\n" % (i, body)
+	xref = len(out)
+	out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+	for off in offsets:
+		out += b"%010d 00000 n \n" % off
+	out += b"trailer\n<</Root 1 0 R/Size %d>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+	return bytes(out)
+
+
 def _grant(user, role, **kw):
 	doc = frappe.new_doc("DA RBAC Assignment")
 	doc.user = user
@@ -321,6 +341,37 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(api.add_attachment(v["name"])["status"], "error")  # no multipart body
 
 	# -- DA-44: weekly activity report -----------------------------------------------
+
+	def test_evidence_is_validated_before_storage(self):
+		frappe.set_user(DA1)
+		v = self._plan(date=today(), time="08:00")["data"]
+		ctx = get_scope_context(DA1)
+		with self.assertRaises(frappe.ValidationError):  # renamed binary is not an image
+			svc.add_attachment(v["name"], content=b"MZ\x90\x00not-an-image", filename="photo.png", ctx=ctx)
+		with self.assertRaises(frappe.ValidationError):  # extension not accepted
+			svc.add_attachment(v["name"], content=_png("red"), filename="script.exe", ctx=ctx)
+		with self.assertRaises(frappe.ValidationError):  # not a PDF inside
+			svc.add_attachment(v["name"], content=b"hello", filename="doc.pdf", ctx=ctx)
+		frappe.conf.da_evidence_max_mb = 1
+		try:
+			with self.assertRaises(frappe.ValidationError):  # over the size limit
+				svc.add_attachment(
+					v["name"], content=b"\x00" * (1024 * 1024 + 1), filename="big.pdf", ctx=ctx
+				)
+		finally:
+			frappe.conf.da_evidence_max_mb = None
+		with self.assertRaises(frappe.ValidationError):  # PDF header but no PDF inside
+			svc.add_attachment(v["name"], content=b"%PDF-1.4 minimal", filename="cert.pdf", ctx=ctx)
+		row = svc.add_attachment(v["name"], content=_pdf(), filename="cert.pdf", kind="Document", ctx=ctx)
+		self.assertEqual(row["kind"], "Document")
+
+	def test_activity_report_rejects_bad_weeks(self):
+		frappe.set_user(DA1)
+		# 2025 has 52 ISO weeks (1 Jan is a Wednesday), so W53 is invalid there; 2026 and 2020 have 53
+		for bad in ("bad", "2026-W0", "2026-W54", "2025-W53", "2026W42", "2026-W42-1"):
+			self.assertEqual(api.activity_report(week=bad)["status"], "error", bad)
+			self.assertEqual(frappe.response.get("http_status_code"), 400, bad)
+		self.assertEqual(api.activity_report(week="2020-W53")["status"], "success")  # 2020 has 53 weeks
 
 	def test_activity_report_counts_the_week(self):
 		frappe.set_user(DA1)

@@ -9,7 +9,9 @@ Communications Officer has no access.
 from __future__ import annotations
 
 import hashlib
-from datetime import date, timedelta
+import re
+from datetime import date, datetime, time, timedelta
+from io import BytesIO
 
 import frappe
 from frappe import _
@@ -232,6 +234,61 @@ def submit_outcome(name: str, *, ctx=None, client_op_id: str | None = None, **ou
 	return serialize(doc)
 
 
+# Evidence a visit may carry: photos of the farm and scanned documents. Anything else is
+# refused by extension *and* by content, so a renamed executable never reaches storage.
+EVIDENCE_TYPES: dict[str, str] = {
+	"jpg": "image",
+	"jpeg": "image",
+	"png": "image",
+	"webp": "image",
+	"pdf": "pdf",
+}
+DEFAULT_EVIDENCE_MAX_MB = 10
+
+
+def _evidence_max_bytes() -> int:
+	return int(frappe.conf.get("da_evidence_max_mb") or DEFAULT_EVIDENCE_MAX_MB) * 1024 * 1024
+
+
+def validate_evidence(content: bytes, filename: str) -> str:
+	"""Refuse evidence that is too large, of a type we do not take, or whose bytes do not
+	match the extension. Returns the file type ("image" / "pdf")."""
+	if not content:
+		frappe.throw(_("file is required."), frappe.ValidationError)
+	if len(content) > _evidence_max_bytes():
+		frappe.throw(
+			_("File is larger than {0} MB.").format(_evidence_max_bytes() // (1024 * 1024)),
+			frappe.ValidationError,
+		)
+	ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
+	kind = EVIDENCE_TYPES.get(ext)
+	if not kind:
+		frappe.throw(
+			_("File type .{0} is not accepted; use {1}.").format(
+				ext or "?", ", ".join(sorted(EVIDENCE_TYPES))
+			),
+			frappe.ValidationError,
+		)
+	if kind == "pdf":
+		try:
+			from pypdf import PdfReader
+
+			if not content.startswith(b"%PDF-"):
+				raise ValueError("missing PDF header")
+			PdfReader(BytesIO(content))
+		except Exception:
+			frappe.throw(_("The file is not a readable PDF."), frappe.ValidationError)
+		return kind
+	try:
+		from PIL import Image
+
+		with Image.open(BytesIO(content)) as img:
+			img.verify()
+	except Exception:
+		frappe.throw(_("The file is not a readable image."), frappe.ValidationError)
+	return kind
+
+
 def _attachment_dict(row) -> dict:
 	return {
 		"name": row.name,
@@ -262,8 +319,11 @@ def add_attachment(
 	corrupted upload is refused rather than stored.
 	"""
 	ctx = ctx or require_roles(*WRITE_ROLES)
-	if not content:
-		frappe.throw(_("file is required."), frappe.ValidationError)
+	validate_evidence(content, filename)
+	# Row lock for the rest of the transaction: two uploads of the same bytes at the same
+	# moment then run one after the other, and the second sees the first's row.
+	if not frappe.db.get_value("DA Visit", name, "name", for_update=True):
+		frappe.throw(_("Visit {0} not found.").format(name), frappe.DoesNotExistError)
 	doc = _load_in_scope(name, ctx, write=True)
 	if doc.physical_status not in (*OPEN_STATES, COMPLETE):
 		frappe.throw(_("Visit {0} is closed; evidence cannot be added.").format(name), frappe.ValidationError)
@@ -317,11 +377,14 @@ def resolve_da_for_read(da_id: str | None, ctx: ScopeContext) -> str:
 def _week_range(week: str | None) -> tuple[date, date, str]:
 	"""Monday..Sunday of an ISO week ("2026-W42"); the current week when not given."""
 	if week:
-		try:
-			y, w = week.strip().upper().split("-W")
-			start = date.fromisocalendar(int(y), int(w), 1)
-		except ValueError, AttributeError:
+		m = re.fullmatch(r"(\d{4})-W(\d{1,2})", str(week).strip().upper())
+		if not m:
 			frappe.throw(_("week must look like 2026-W42."), frappe.ValidationError)
+		try:
+			# rejects week 0, 54, and 53 in a 52-week year
+			start = date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+		except ValueError:
+			frappe.throw(_("{0} is not a valid ISO week.").format(week), frappe.ValidationError)
 	else:
 		iso = getdate().isocalendar()
 		start = date.fromisocalendar(iso[0], iso[1], 1)
@@ -339,7 +402,7 @@ def activity_report(
 	ctx = ctx or require_roles(*READ_ROLES)
 	da_id = resolve_da_for_read(da_id, ctx)
 	start, end, label = _week_range(week)
-	rng = ("between", [f"{start} 00:00:00", f"{end} 23:59:59"])
+	rng = ("between", [datetime.combine(start, time.min), datetime.combine(end, time.max)])
 	done = frappe.get_all(
 		"DA Visit",
 		filters={"da_id": da_id, "physical_status": COMPLETE, "completed_at": rng},
