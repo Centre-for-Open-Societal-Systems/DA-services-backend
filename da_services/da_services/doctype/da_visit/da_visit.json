@@ -64,6 +64,7 @@
   "created_by_user",
   "sec_device",
   "client_op_id",
+  "outcome_client_op_id",
   "device_id",
   "captured_at",
   "sync_state"
@@ -125,13 +126,14 @@
   {"fieldname": "created_by_user", "fieldtype": "Link", "label": "Created By", "options": "User", "read_only": 1},
   {"fieldname": "sec_device", "fieldtype": "Section Break", "label": "Device"},
   {"description": "Idempotency key from the device operation that created this row; unique when set.", "fieldname": "client_op_id", "fieldtype": "Data", "label": "Client Op ID", "search_index": 1},
+  {"description": "Idempotency key of the device operation that submitted the outcome.", "fieldname": "outcome_client_op_id", "fieldtype": "Data", "label": "Outcome Client Op ID", "read_only": 1},
   {"fieldname": "device_id", "fieldtype": "Data", "label": "Device ID"},
   {"fieldname": "captured_at", "fieldtype": "Datetime", "label": "Captured At"},
   {"default": "Accepted", "fieldname": "sync_state", "fieldtype": "Select", "label": "Sync State", "options": "Queued\nUploading\nAccepted\nValidated\nRejected\nConflict\nRetryable failure\nDead letter"}
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-09 11:00:00.000000",
+ "modified": "2026-10-13 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Visit",
