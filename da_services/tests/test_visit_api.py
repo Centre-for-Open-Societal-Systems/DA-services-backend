@@ -365,6 +365,34 @@ class TestVisitAPI(IntegrationTestCase):
 		row = svc.add_attachment(v["name"], content=_pdf(), filename="cert.pdf", kind="Document", ctx=ctx)
 		self.assertEqual(row["kind"], "Document")
 
+	def test_rate_limit_is_per_user_and_per_endpoint(self):
+		from da_services.utils.ratelimit import rate_limited
+
+		calls = []
+
+		@rate_limited(limit=2, seconds=60)
+		def ping():
+			calls.append(1)
+			return "ok"
+
+		frappe.set_user(DA1)
+		self.assertEqual(ping(), "ok")  # no HTTP request: never limited
+		frappe.local.request = Request(EnvironBuilder(path="/api/v1/da-services/x").get_environ())
+		try:
+			frappe.cache.delete_value(
+				frappe.cache.make_key(f"rl:da:{ping.__module__}.{ping.__name__}:{DA1}:60")
+			)
+			self.assertEqual(ping(), "ok")
+			self.assertEqual(ping(), "ok")
+			with self.assertRaises(frappe.RateLimitExceededError):
+				ping()
+			frappe.set_user(SUP)  # another user has their own bucket
+			self.assertEqual(ping(), "ok")
+		finally:
+			frappe.local.request = None
+			frappe.set_user(DA1)
+		self.assertEqual(len(calls), 4)
+
 	def test_activity_report_rejects_bad_weeks(self):
 		frappe.set_user(DA1)
 		# 2025 has 52 ISO weeks (1 Jan is a Wednesday), so W53 is invalid there; 2026 and 2020 have 53

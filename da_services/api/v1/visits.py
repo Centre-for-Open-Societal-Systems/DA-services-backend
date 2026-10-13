@@ -35,13 +35,13 @@ import json
 
 import frappe
 from frappe import _
-from frappe.rate_limiter import rate_limit
 from frappe.utils import get_datetime
 from oan_auth_service.api.utils import handle_api_errors, success_response
 
 from da_services.api.router import route
 from da_services.services import visits as svc
 from da_services.utils.permissions import require_roles
+from da_services.utils.ratelimit import rate_limited
 
 PLAN_FIELDS = (
 	"farmer_id",
@@ -264,7 +264,7 @@ def submit(visit_id: str, **kwargs):
 
 @route("/visits/<visit_id>/attachments", methods=("POST",), status=201, summary="Upload geo-tagged evidence")
 @frappe.whitelist(methods=["POST"])
-@rate_limit(limit=60, seconds=60)  # per IP; a DA uploads a handful per visit
+@rate_limited(limit=60, seconds=60)  # per user; a DA uploads a handful per visit
 @handle_api_errors
 def add_attachment(visit_id: str, **kwargs):
 	ctx = require_roles(*svc.WRITE_ROLES)
@@ -292,7 +292,7 @@ def add_attachment(visit_id: str, **kwargs):
 
 @route("/reports/activity", methods=("GET",), summary="Weekly activity report")
 @frappe.whitelist()
-@rate_limit(limit=120, seconds=60)
+@rate_limited(limit=120, seconds=60)
 @handle_api_errors
 def activity_report(**kwargs):
 	ctx = require_roles(*svc.READ_ROLES)
