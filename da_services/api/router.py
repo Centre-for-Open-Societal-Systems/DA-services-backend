@@ -68,7 +68,7 @@ def _register() -> None:
 	ensure_auth_routes()
 
 	# Importing the endpoint modules executes their @route(...) registrations.
-	from da_services.api.v1 import da, dashboard, me, notifications, rbac
+	from da_services.api.v1 import da, dashboard, me, notifications, rbac, visits
 
 	for rule in _rules:
 		if rule not in frappe.api.API_URL_MAP._rules:
