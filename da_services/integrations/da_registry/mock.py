@@ -112,6 +112,16 @@ class MockDARegistryClient(DARegistryClient):
 			raise DANotFound(da_id)
 		return to_da_reference(payload)
 
+	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
+		rows = []
+		for payload in self._records.values():
+			if woreda and payload.get("woreda") != woreda:
+				continue
+			if region and payload.get("region") != region:
+				continue
+			rows.append(to_da_reference(payload))
+		return sorted(rows, key=lambda r: r.da_id)
+
 	def push_lifecycle_outcome(self, outcome: LifecycleOutcome) -> IntegrationResult:
 		if outcome.reference in self._outcomes:
 			return self._outcomes[outcome.reference]  # idempotent replay

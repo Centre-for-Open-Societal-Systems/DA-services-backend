@@ -56,6 +56,14 @@ class DARegistryClient(ABC):
 			return False
 
 	@abstractmethod
+	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
+		"""DAs posted in a Woreda (or Region). Assignment list, My Teams, Supervisor views.
+
+		The registry's "DAs by Woreda" call is still to be confirmed with the registry
+		team; the mock answers from its fixtures.
+		"""
+
+	@abstractmethod
 	def push_lifecycle_outcome(self, outcome: LifecycleOutcome) -> IntegrationResult:
 		"""Tell the registry an approved lifecycle decision (status change, transfer).
 
@@ -70,6 +78,11 @@ class HttpDARegistryClient(DARegistryClient):
 		self.timeout = timeout
 
 	def get_da(self, da_id: str) -> DAReference:
+		raise DARegistryContractPending(
+			"DA Registry HTTP contract is not confirmed yet (OpenG2P Gen 2 vs Part 1 service APIs)."
+		)
+
+	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
 		raise DARegistryContractPending(
 			"DA Registry HTTP contract is not confirmed yet (OpenG2P Gen 2 vs Part 1 service APIs)."
 		)

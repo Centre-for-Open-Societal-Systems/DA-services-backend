@@ -475,6 +475,28 @@ Cash receipted), `notes`, `gateway_state` (Draft / Queued / Sent / Confirmed / F
 
 ---
 
+### 5.13 DA Kebele Assignment *(added in DA-37/38, not in v1)*
+
+The Supervisor's FR-05 decision to post a DA to a Kebele, kept separately from the approved
+cross-Woreda transfer in 6.2 (which needs two approvers). The DA Registry remains the posting
+of record; this row is the decision, its geofence result and the push to the registry.
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | `DA-KAS-{YYYY}-{#######}` | |
+| `da_id` | Data, indexed | |
+| `kebele` | Link DA Administrative Area | level Kebele; `region`/`zone`/`woreda` copied from its ancestors |
+| `state` | Select: Proposed / Validated / Flagged / Effective / Superseded | portal vocabulary; one live row per DA |
+| `mode` | Select: Automatic / Manual | FSD 3.5 farmer association |
+| `effective_date`, `reason`, `assigned_by` | | |
+| `geofence_result`, `geofence_reason`, `da_lat`, `da_lng` | | Not checked / In-boundary / Out-of-bounds; point-in-polygon against the Kebele `boundary_geojson` |
+| `supersedes`, `superseded_by` | Link self | history chain |
+| `registry_sync_state`, `registry_reference`, `registry_error` | | Pending / Accepted / Failed / Not sent (Flagged rows are not pushed) |
+| `client_op_id` | | idempotency |
+
+`DA Administrative Area` (4.1) gained `boundary_geojson` (JSON) so the geofence check can run
+before a GIS service exists; `boundary_ref` stays for the master's id/version.
+
 ## 6. Supervision and lifecycle (Part 2)
 
 ### 6.1 Approval workflow pattern

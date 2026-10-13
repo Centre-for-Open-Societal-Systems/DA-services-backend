@@ -71,6 +71,14 @@ def has_da_task_permission(doc, ptype: str = "read", user: str | None = None) ->
 	return has_da_scoped_permission(doc, ptype, user)
 
 
+def da_kebele_assignment_query_conditions(user: str | None = None) -> str:
+	return da_scoped_query_conditions("DA Kebele Assignment", user)
+
+
+def has_da_kebele_assignment_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	return has_da_scoped_permission(doc, ptype, user)
+
+
 def da_visit_query_conditions(user: str | None = None) -> str:
 	return da_scoped_query_conditions("DA Visit", user)
 

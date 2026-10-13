@@ -10,11 +10,13 @@ Woreda ET04-W01); with a real registry the posting lookup on insert decides the 
 
 from __future__ import annotations
 
+import json
+
 import frappe
 from frappe.utils import add_days, today
 
+from da_services.services import assignments, notifications, tasks, visits
 from da_services.services import constants as C
-from da_services.services import notifications, tasks, visits
 from da_services.utils.permissions import get_scope_context
 
 DEMO_PASSWORD = "Demo#2026"  # local demo only; the guard below keeps this off real sites
@@ -112,6 +114,61 @@ def _tasks(ctx) -> None:
 			tasks.complete_task(out["name"], ctx=ctx)
 
 
+# Region > Zone > Woreda > Kebele codes match the mock DA Registry fixtures (ET04-W01-K03 ...).
+# Names are placeholders until the administrative master is synced.
+AREAS = [
+	("ET04", "Region", None, "Oromia"),
+	("ET04-Z01", "Zone", "ET04", "West Shewa"),
+	("ET04-W01", "Woreda", "ET04-Z01", "Bako Tibe"),
+	("ET04-W01-K01", "Kebele", "ET04-W01", "Bako 01"),
+	("ET04-W01-K02", "Kebele", "ET04-W01", "Bako 02"),
+	("ET04-W01-K03", "Kebele", "ET04-W01", "Dambi Gobu"),
+	("ET04-W01-K04", "Kebele", "ET04-W01", "Koye Feche"),
+	("ET04-W01-K05", "Kebele", "ET04-W01", "Amarti Gibe"),
+	("ET04-W01-K07", "Kebele", "ET04-W01", "Gombo"),
+	("ET03", "Region", None, "Amhara"),
+	("ET03-Z02", "Zone", "ET03", "North Shewa"),
+	("ET03-W02", "Woreda", "ET03-Z02", "Ankober"),
+	("ET03-W02-K01", "Kebele", "ET03-W02", "Ankober 01"),
+]
+# One demo boundary so the geofence check can be exercised: a box around Dambi Gobu.
+DEMO_BOUNDARY = {
+	"ET04-W01-K03": {
+		"type": "Polygon",
+		"coordinates": [[[37.50, 9.08], [37.62, 9.08], [37.62, 9.17], [37.50, 9.17], [37.50, 9.08]]],
+	}
+}
+
+
+def _areas() -> None:
+	for code, level, parent, name_en in AREAS:
+		if frappe.db.exists("DA Administrative Area", code):
+			continue
+		doc = frappe.new_doc("DA Administrative Area")
+		doc.code = code
+		doc.level = level
+		doc.parent_area = parent
+		doc.name_en = name_en
+		doc.source = "seed_demo"
+		if code in DEMO_BOUNDARY:
+			doc.boundary_geojson = json.dumps(DEMO_BOUNDARY[code])
+			doc.boundary_ref = "demo-box-v1"
+		doc.insert(ignore_permissions=True)
+
+
+def _assignments(ctx) -> None:
+	assignments.assign(
+		da_id=DA_ID,
+		kebele="ET04-W01-K03",
+		effective_date=add_days(today(), -400),
+		reason="Seeded demo posting",
+		mode="Automatic",
+		da_location={"lat": 9.1236, "lng": 37.5671},  # inside the demo boundary
+		client_op_id="seed-kas-1",
+		ctx=ctx,
+	)
+
+
 def _notifications() -> None:
 	user = "da.demo@da.local"
 	rows = [
@@ -130,6 +187,8 @@ def run(force: str | int | bool = False) -> dict:
 	for email, first_name, role, grant in USERS:
 		_user(email, first_name, role, grant)
 	ctx = get_scope_context("Administrator")
+	_areas()
+	_assignments(ctx)
 	_visits(ctx)
 	_tasks(ctx)
 	_notifications()
@@ -138,6 +197,8 @@ def run(force: str | int | bool = False) -> dict:
 		"visits": frappe.db.count("DA Visit", {"da_id": DA_ID}),
 		"tasks": frappe.db.count("DA Task", {"da_id": DA_ID}),
 		"notifications": frappe.db.count("DA Notification", {"user": "da.demo@da.local"}),
+		"areas": frappe.db.count("DA Administrative Area"),
+		"assignments": frappe.db.count("DA Kebele Assignment", {"da_id": DA_ID}),
 	}
 	print(f"seed_demo: {counts}")
 	return counts
