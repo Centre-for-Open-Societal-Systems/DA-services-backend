@@ -67,7 +67,7 @@
   {"fieldname": "col_registry", "fieldtype": "Column Break"},
   {"fieldname": "registry_error", "fieldtype": "Small Text", "label": "Registry Error", "read_only": 1},
   {"fieldname": "sec_device", "fieldtype": "Section Break", "label": "Device"},
-  {"description": "Idempotency key of the operation that created this row; unique when set.", "fieldname": "client_op_id", "fieldtype": "Data", "label": "Client Op ID", "search_index": 1}
+  {"description": "Idempotency key of the operation that created this row; enforced unique by the database (NULL when absent).", "fieldname": "client_op_id", "fieldtype": "Data", "label": "Client Op ID", "unique": 1}
  ],
  "index_web_pages_for_search": 0,
  "links": [],

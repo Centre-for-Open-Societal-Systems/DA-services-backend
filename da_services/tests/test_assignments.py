@@ -243,7 +243,8 @@ class TestAssignments(IntegrationTestCase):
 			frappe.db.get_value("DA Kebele Assignment", first["name"], ["state", "superseded_by"]),
 			("Superseded", second["name"]),
 		)
-		# out of bounds: flagged, not pushed, prior stays... no: a Flagged row is also live and supersedes
+		# Out of bounds: a Flagged decision is recorded and not pushed, and the posting in
+		# force (second) stays Effective until a Supervisor overrides the flag.
 		third = api.assign(da_id="DA-000001", kebele="ET04-W01-K03", da_location={"lat": 9.30, "lng": 37.56})[
 			"data"
 		]
@@ -252,11 +253,91 @@ class TestAssignments(IntegrationTestCase):
 			("Flagged", "Out-of-bounds", "Not sent"),
 		)
 		self.assertIn("outside", third["geofence_reason"])
-		self.assertEqual(frappe.db.get_value("DA Kebele Assignment", second["name"], "state"), "Superseded")
+		self.assertEqual(frappe.db.get_value("DA Kebele Assignment", second["name"], "state"), "Effective")
+		self.assertIsNone(third["supersedes"])
 		self.assertEqual(frappe.db.count("DA Notification", {"user": DA1, "event": "assignment_flagged"}), 1)
-		cov = {k["kebele"]: k for k in api.coverage()["data"]["kebeles"]}
-		self.assertEqual(cov["ET04-W01-K03"]["coverage"], "Flagged")
+		row = {r["da_id"]: r for r in api.list_assignments()["data"]}["DA-000001"]
+		self.assertEqual(
+			(row["kebele"], row["assignment_status"], row["geofence"]),
+			("ET04-W01-K01", "Flagged", "Out-of-bounds"),
+		)
+		self.assertEqual(row["flagged"]["kebele"], "ET04-W01-K03")
 		self.assertEqual(api.list_assignments()["meta"]["summary"]["flagged"], 1)
+		cov = {k["kebele"]: k for k in api.coverage()["data"]["kebeles"]}
+		self.assertEqual(
+			(cov["ET04-W01-K01"]["coverage"], cov["ET04-W01-K03"]["coverage"]), ("Full", "Flagged")
+		)
+		# A second flagged attempt replaces the earlier flag; a later in-boundary decision replaces both.
+		fourth = api.assign(
+			da_id="DA-000001", kebele="ET04-W01-K03", da_location={"lat": 9.40, "lng": 37.56}
+		)["data"]
+		self.assertEqual(frappe.db.get_value("DA Kebele Assignment", third["name"], "state"), "Superseded")
+		fifth = api.assign(da_id="DA-000001", kebele="ET04-W01-K03", da_location={"lat": 9.12, "lng": 37.56})[
+			"data"
+		]
+		self.assertEqual(fifth["state"], "Effective")
+		states = frappe.get_all(
+			"DA Kebele Assignment", filters={"name": ("in", [second["name"], fourth["name"]])}, pluck="state"
+		)
+		self.assertEqual(set(states), {"Superseded"})
+		self.assertIsNone({r["da_id"]: r for r in api.list_assignments()["data"]}["DA-000001"]["flagged"])
+
+	def test_coordinates_are_validated(self):
+		frappe.set_user(SUP)
+		frappe.db.commit()  # nosemgrep: error calls below roll back uncommitted rows
+		for bad in (
+			{"lat": 91, "lng": 37.5},
+			{"lat": 9.1, "lng": -181},
+			{"lat": "x", "lng": 37.5},
+			{"lat": 9.1},
+		):
+			out = api.assign(da_id="DA-000001", kebele="ET04-W01-K03", da_location=bad)
+			self.assertEqual(out["status"], "error", bad)
+			self.assertEqual(frappe.response.get("http_status_code"), 400, bad)
+		self.assertEqual(frappe.db.count("DA Kebele Assignment"), 0)
+		with self.assertRaises(ValueError):
+			geofence.validate_coordinates(float("nan"), 0)
+
+	def test_client_op_id_is_unique_in_the_database(self):
+		frappe.set_user("Administrator")
+		a = svc.assign(
+			da_id="DA-000001", kebele="ET04-W01-K03", client_op_id="kas-db-1", ctx=_ctx("Administrator")
+		)
+		doc = frappe.get_doc(
+			{
+				"doctype": "DA Kebele Assignment",
+				"da_id": "DA-000001",
+				"kebele": "ET04-W01-K01",
+				"state": "Effective",
+				"mode": "Automatic",
+				"effective_date": today(),
+				"client_op_id": "kas-db-1",
+			}
+		)
+		with self.assertRaises(frappe.DuplicateEntryError):
+			doc.insert(ignore_permissions=True)
+		self.assertEqual(
+			frappe.db.get_value("DA Kebele Assignment", {"client_op_id": "kas-db-1"}, "name"), a["name"]
+		)
+		self.assertEqual(frappe.db.count("DA Kebele Assignment", {"client_op_id": ("is", "set")}), 1)
+
+	def test_registry_down_is_503_and_notification_failure_is_not_fatal(self):
+		from unittest.mock import patch
+
+		from da_services.integrations.da_registry.client import DARegistryUnavailable
+
+		frappe.set_user(SUP)
+		frappe.db.commit()  # nosemgrep
+		with patch.object(MockDARegistryClient, "list_das", side_effect=DARegistryUnavailable("down")):
+			out = api.list_assignments()
+			self.assertEqual((out["status"], out["code"]), ("error", "SERVICE_UNAVAILABLE"))
+			self.assertEqual(frappe.response.get("http_status_code"), 503)
+			self.assertEqual(frappe.response.get("http_status_code"), 503)
+		with patch("da_services.services.assignments.notify_da", side_effect=RuntimeError("smtp down")):
+			out = api.assign(da_id="DA-000001", kebele="ET04-W01-K03", client_op_id="kas-ntf-1")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["data"]["state"], "Effective")
+		self.assertEqual(frappe.db.count("DA Notification", {"user": DA1}), 0)
 
 	def test_assign_scope_and_validation(self):
 		frappe.set_user(SUP)

@@ -4,6 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils.caching import request_cache
 
 LEVELS = ("Region", "Zone", "Woreda", "Kebele")
 
@@ -31,7 +32,9 @@ class DAAdministrativeArea(Document):
 		return ancestors_of(self.code)
 
 
+@request_cache
 def ancestors_of(code: str) -> dict:
+	"""Walk up the tree (at most four small lookups); memoised for the rest of the request."""
 	out = {"region": None, "zone": None, "woreda": None, "kebele": None}
 	current = code
 	for _i in range(4):

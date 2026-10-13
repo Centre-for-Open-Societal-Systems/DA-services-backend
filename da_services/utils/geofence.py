@@ -7,9 +7,28 @@ Ray casting is enough at Kebele scale; holes (inner rings) are honoured.
 
 from __future__ import annotations
 
+import math
+
 NOT_CHECKED = "Not checked"
 IN_BOUNDARY = "In-boundary"
 OUT_OF_BOUNDS = "Out-of-bounds"
+
+
+def validate_coordinates(lat, lng) -> tuple[float, float]:
+	"""(lat, lng) as floats inside WGS84 bounds; ValueError otherwise (including NaN / inf)."""
+	try:
+		lat_f, lng_f = float(lat), float(lng)
+	except TypeError:
+		raise ValueError("lat and lng must be numbers") from None
+	except ValueError:
+		raise ValueError("lat and lng must be numbers") from None
+	if not (math.isfinite(lat_f) and math.isfinite(lng_f)):
+		raise ValueError("lat and lng must be finite numbers")
+	if not (-90.0 <= lat_f <= 90.0):
+		raise ValueError("lat must be between -90 and 90")
+	if not (-180.0 <= lng_f <= 180.0):
+		raise ValueError("lng must be between -180 and 180")
+	return lat_f, lng_f
 
 
 def _in_ring(lng: float, lat: float, ring: list) -> bool:

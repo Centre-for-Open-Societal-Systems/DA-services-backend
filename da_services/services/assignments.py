@@ -8,12 +8,17 @@ What is ours and what is not:
   row stays `registry_sync_state = Failed` with the error; the Registry Sync screen
   (DA-36) retries.
 - `DA Kebele Assignment` is the decision record: who, when, why, farmer-association
-  mode, geofence result, and the chain of superseded rows.
+  mode, geofence result, and the chain of superseded rows. Only an Effective row is a
+  posting in force; a Flagged row is a pending decision shown next to it.
 - Farmer counts come from the registry projection (`farmer_count`) until the Farmer
   Registry link exists; households are unknown today and returned as null.
 - Geofence: the DA position (sent by the client, or unknown) against the Kebele's
   boundary from DA Administrative Area. No boundary → "Not checked", recorded, not
   blocking.
+
+Consistency: the decision (new row + supersessions) is written under a per-DA lock and
+committed before the registry push and the notification, which are best-effort and
+recorded on the row; a failure there never loses the decision.
 
 Scope: Supervisor acts within their Woreda, Executive reads their Region, Admin all;
 a DA reads their own row only.
@@ -44,6 +49,7 @@ from da_services.utils.permissions import ScopeContext, require_roles
 
 READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 WRITE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
+LOCK_TIMEOUT_SECONDS = 5
 
 ASSIGNMENT_FIELDS = [
 	"name",
@@ -79,7 +85,10 @@ def areas(*, level: str | None = None, parent: str | None = None, q: str | None 
 	if parent:
 		filters["parent_area"] = parent
 	if q:
-		filters["name_en"] = ("like", f"%{q}%")
+		# Parameterised by Frappe; only the LIKE wildcards need escaping so "Bako_01"
+		# matches literally.
+		needle = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")[:80]
+		filters["name_en"] = ("like", f"%{needle}%")
 	return frappe.get_all(
 		"DA Administrative Area",
 		filters=filters,
@@ -90,6 +99,7 @@ def areas(*, level: str | None = None, parent: str | None = None, q: str | None 
 
 
 def _area_names(codes: set[str]) -> dict[str, str]:
+	codes = {c for c in codes if c}
 	if not codes:
 		return {}
 	rows = frappe.get_all(
@@ -117,30 +127,8 @@ def _agent_status(ref: DAReference, kebele: str | None) -> str:
 	return "On-leave" if ref.active_status == C.ACTIVE_STATUS_ON_LEAVE else "Active"
 
 
-def _row(ref: DAReference, asg: dict | None, names: dict[str, str]) -> dict:
-	kebele = asg["kebele"] if asg else ref.kebele
-	return {
-		"da_id": ref.da_id,
-		"agent": ref.full_name,
-		"region": ref.region,
-		"woreda": ref.woreda,
-		"kebele": kebele,
-		"kebele_name": names.get(kebele) if kebele else None,
-		"farmers": ref.farmer_count,
-		"status": _agent_status(ref, kebele),
-		"assignment_status": asg["state"] if asg else ("Effective" if ref.kebele else "Proposed"),
-		"assignment_source": "da_services" if asg else "registry",
-		"assignment_id": asg["name"] if asg else None,
-		"effective_date": asg["effective_date"] if asg else None,
-		"geofence": (asg["geofence_result"] if asg else "Not checked"),
-		"geofence_reason": asg["geofence_reason"] if asg else None,
-		"mode": asg["mode"] if asg else None,
-		"assigned_by": asg["assigned_by"] if asg else None,
-		"registry_sync_state": asg["registry_sync_state"] if asg else None,
-	}
-
-
 def _live_assignments(da_ids: list[str]) -> dict[str, dict]:
+	"""{da_id: {"current": Effective row or None, "flagged": pending Flagged row or None}}."""
 	if not da_ids:
 		return {}
 	rows = frappe.get_all(
@@ -151,8 +139,53 @@ def _live_assignments(da_ids: list[str]) -> dict[str, dict]:
 	)
 	out: dict[str, dict] = {}
 	for r in rows:
-		out.setdefault(r.da_id, serialize(r))
+		slot = out.setdefault(r.da_id, {"current": None, "flagged": None})
+		key = "current" if r.state == "Effective" else "flagged"
+		if slot[key] is None:
+			slot[key] = serialize(r)
 	return out
+
+
+def _row(ref: DAReference, live: dict | None, names: dict[str, str]) -> dict:
+	"""One list row: the posting in force (ours, else the registry's) plus any pending flag."""
+	current = (live or {}).get("current")
+	flagged = (live or {}).get("flagged")
+	kebele = current["kebele"] if current else ref.kebele
+	if current:
+		assignment_status = "Flagged" if flagged else current["state"]
+	else:
+		assignment_status = "Flagged" if flagged else ("Effective" if ref.kebele else "Proposed")
+	decision = flagged or current  # the latest decision carries the geofence result shown
+	return {
+		"da_id": ref.da_id,
+		"agent": ref.full_name,
+		"region": ref.region,
+		"woreda": ref.woreda,
+		"kebele": kebele,
+		"kebele_name": names.get(kebele) if kebele else None,
+		"farmers": ref.farmer_count,
+		"status": _agent_status(ref, kebele),
+		"assignment_status": assignment_status,
+		"assignment_source": "da_services" if current else "registry",
+		"assignment_id": current["name"] if current else None,
+		"effective_date": current["effective_date"] if current else None,
+		"geofence": decision["geofence_result"] if decision else "Not checked",
+		"geofence_reason": decision["geofence_reason"] if decision else None,
+		"mode": current["mode"] if current else None,
+		"assigned_by": (decision or {}).get("assigned_by"),
+		"registry_sync_state": current["registry_sync_state"] if current else None,
+		"flagged": (
+			{
+				"assignment_id": flagged["name"],
+				"kebele": flagged["kebele"],
+				"kebele_name": names.get(flagged["kebele"]),
+				"effective_date": flagged["effective_date"],
+				"reason": flagged["geofence_reason"],
+			}
+			if flagged
+			else None
+		),
+	}
 
 
 def _resolve_officer_scope(ctx: ScopeContext, woreda: str | None) -> tuple[str | None, str | None]:
@@ -175,15 +208,6 @@ def _resolve_officer_scope(ctx: ScopeContext, woreda: str | None) -> tuple[str |
 	frappe.throw(_("woreda is required."), frappe.ValidationError)
 
 
-def _registry_rows(ctx: ScopeContext, woreda: str | None, region: str | None) -> list[DAReference]:
-	try:
-		return get_client().list_das(woreda=woreda, region=region)
-	except (DARegistryUnavailable, DARegistryContractPending) as exc:
-		frappe.throw(
-			_("The DA Registry is unavailable ({0}).").format(exc.__class__.__name__), frappe.ValidationError
-		)
-
-
 def list_assignments(
 	ctx: ScopeContext | None = None,
 	*,
@@ -194,27 +218,34 @@ def list_assignments(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int, dict]:
-	"""Agent assignment list for a Woreda (DA-37). Returns (rows, total, summary)."""
+	"""Agent assignment list for a Woreda (DA-37). Returns (rows, total, summary).
+
+	Raises DARegistryUnavailable / DARegistryContractPending when the registry cannot
+	answer; the API layer turns those into 503.
+	"""
 	ctx = ctx or require_roles(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
 		frappe.throw(_("Use /assignments/me."), frappe.PermissionError)
 	woreda, region = _resolve_officer_scope(ctx, woreda)
-	refs = _registry_rows(ctx, woreda, region)
+	refs = get_client().list_das(woreda=woreda, region=region)
 	live = _live_assignments([r.da_id for r in refs])
-	names = _area_names({a["kebele"] for a in live.values()} | {r.kebele for r in refs if r.kebele})
+	codes = {r.kebele for r in refs}
+	for slot in live.values():
+		codes |= {(slot["current"] or {}).get("kebele"), (slot["flagged"] or {}).get("kebele")}
+	names = _area_names(codes)
 	rows = [_row(r, live.get(r.da_id), names) for r in refs]
 	summary = {
 		"agents": len(rows),
 		"unassigned": sum(1 for r in rows if r["status"] == "Unassigned"),
 		"on_leave": sum(1 for r in rows if r["status"] == "On-leave"),
-		"flagged": sum(1 for r in rows if r["assignment_status"] == "Flagged"),
+		"flagged": sum(1 for r in rows if r["flagged"]),
 	}
 	if status:
 		rows = [r for r in rows if r["status"] == status]
 	if assignment_status:
 		rows = [r for r in rows if r["assignment_status"] == assignment_status]
 	if q:
-		needle = q.strip().lower()
+		needle = q.strip().lower()[:80]
 		rows = [
 			r
 			for r in rows
@@ -235,9 +266,11 @@ def my_assignment(ctx: ScopeContext | None = None) -> dict:
 		frappe.throw(_("Your account is not bound to a DA-ID."), frappe.PermissionError)
 	ref = get_da_reference(own[0], ctx)
 	live = _live_assignments([ref.da_id])
-	asg = live.get(ref.da_id)
-	names = _area_names({asg["kebele"]} if asg else ({ref.kebele} if ref.kebele else set()))
-	row = _row(ref, asg, names)
+	slot = live.get(ref.da_id) or {"current": None, "flagged": None}
+	names = _area_names(
+		{ref.kebele, (slot["current"] or {}).get("kebele"), (slot["flagged"] or {}).get("kebele")}
+	)
+	row = _row(ref, slot, names)
 	row["history"] = [
 		serialize(r)
 		for r in frappe.get_all(
@@ -252,7 +285,11 @@ def my_assignment(ctx: ScopeContext | None = None) -> dict:
 
 
 def coverage(ctx: ScopeContext | None = None, *, woreda: str | None = None) -> dict:
-	"""Kebele coverage tiles for a Woreda (DA-37): agents per Kebele and a coverage state."""
+	"""Kebele coverage tiles for a Woreda (DA-37): agents per Kebele and a coverage state.
+
+	Agents are counted on the posting in force; a Kebele that is the target of a pending
+	Flagged decision is shown as Flagged so the Supervisor sees what needs a look.
+	"""
 	ctx = ctx or require_roles(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 	woreda, _region = _resolve_officer_scope(ctx, woreda)
 	if not woreda:
@@ -260,16 +297,19 @@ def coverage(ctx: ScopeContext | None = None, *, woreda: str | None = None) -> d
 	rows, _total, _summary = list_assignments(ctx, woreda=woreda, limit=500)
 	kebeles = areas(level="Kebele", parent=woreda)
 	by_kebele: dict[str, list[dict]] = {}
+	flagged_targets: set[str] = set()
 	for r in rows:
 		if r["kebele"] and r["status"] != "Separated":
 			by_kebele.setdefault(r["kebele"], []).append(r)
+		if r["flagged"]:
+			flagged_targets.add(r["flagged"]["kebele"])
 	out = []
 	for k in kebeles:
 		agents = by_kebele.get(k["code"], [])
-		if not agents:
-			state = "Uncovered"
-		elif any(a["assignment_status"] == "Flagged" for a in agents):
+		if k["code"] in flagged_targets:
 			state = "Flagged"
+		elif not agents:
+			state = "Uncovered"
 		elif all(a["status"] == "On-leave" for a in agents):
 			state = "Agent on leave"
 		else:
@@ -305,6 +345,32 @@ def coverage(ctx: ScopeContext | None = None, *, woreda: str | None = None) -> d
 # -- assign / reassign ----------------------------------------------------------------
 
 
+def _lock_da(da_id: str) -> str:
+	"""Serialise decisions for one DA across requests (MariaDB named lock)."""
+	key = f"da_services:kebele_assignment:{da_id}"
+	got = frappe.db.sql("select get_lock(%s, %s)", (key, LOCK_TIMEOUT_SECONDS))[0][0]
+	if not got:
+		frappe.throw(
+			_("Another assignment for DA {0} is being saved; try again in a moment.").format(da_id),
+			frappe.ValidationError,
+		)
+	return key
+
+
+def _unlock(key: str) -> None:
+	frappe.db.sql("select release_lock(%s)", (key,))
+
+
+def _replayed(client_op_id):
+	"""The same device operation landed from a parallel request: answer with its row."""
+	existing = client_op_id and frappe.db.get_value(
+		"DA Kebele Assignment", {"client_op_id": client_op_id}, "name"
+	)
+	if not existing:
+		raise
+	return serialize(frappe.get_doc("DA Kebele Assignment", existing))
+
+
 def assign(
 	*,
 	da_id: str,
@@ -324,6 +390,14 @@ def assign(
 		frappe.throw(_("da_id and kebele are required."), frappe.ValidationError)
 	if mode not in ("Automatic", "Manual"):
 		frappe.throw(_("mode must be Automatic or Manual."), frappe.ValidationError)
+	client_op_id = (client_op_id or "").strip() or None
+
+	loc = dict(da_location or {})
+	if loc.get("lat") is not None or loc.get("lng") is not None:
+		try:
+			loc["lat"], loc["lng"] = geofence.validate_coordinates(loc.get("lat"), loc.get("lng"))
+		except ValueError as exc:
+			frappe.throw(_("da_location: {0}.").format(exc), frappe.ValidationError)
 
 	if client_op_id:
 		existing = frappe.db.get_value("DA Kebele Assignment", {"client_op_id": client_op_id}, "name")
@@ -343,7 +417,6 @@ def assign(
 	if not ctx.unrestricted and not ctx.covers(tree["region"], tree["woreda"], tree["zone"]):
 		frappe.throw(_("Kebele {0} is outside your Woreda.").format(kebele), frappe.PermissionError)
 
-	loc = da_location or {}
 	boundary = area.boundary_geojson
 	if isinstance(boundary, str):
 		try:
@@ -353,43 +426,64 @@ def assign(
 	result, why = geofence.check(loc.get("lat"), loc.get("lng"), boundary, area.name_en)
 	state = "Flagged" if result == geofence.OUT_OF_BOUNDS else "Effective"
 
-	doc = frappe.get_doc(
-		{
-			"doctype": "DA Kebele Assignment",
-			"da_id": ref.da_id,
-			"kebele": kebele,
-			"state": state,
-			"mode": mode,
-			"effective_date": getdate(effective_date) if effective_date else getdate(),
-			"reason": reason,
-			"assigned_by": ctx.user,
-			"geofence_result": result,
-			"geofence_reason": why,
-			"da_lat": loc.get("lat"),
-			"da_lng": loc.get("lng"),
-			"registry_sync_state": "Pending" if state == "Effective" else "Not sent",
-			"client_op_id": client_op_id,
-		}
-	)
-	doc.insert(ignore_permissions=True)
+	# The decision itself is written under a per-DA lock and committed, so it is never
+	# lost to a later failure of the registry push or the notification.
+	lock = _lock_da(ref.da_id)
+	try:
+		doc = frappe.get_doc(
+			{
+				"doctype": "DA Kebele Assignment",
+				"da_id": ref.da_id,
+				"kebele": kebele,
+				"state": state,
+				"mode": mode,
+				"effective_date": getdate(effective_date) if effective_date else getdate(),
+				"reason": reason,
+				"assigned_by": ctx.user,
+				"geofence_result": result,
+				"geofence_reason": why,
+				"da_lat": loc.get("lat"),
+				"da_lng": loc.get("lng"),
+				"registry_sync_state": "Pending" if state == "Effective" else "Not sent",
+				"client_op_id": client_op_id,
+			}
+		)
+		try:
+			doc.insert(ignore_permissions=True)
+		except frappe.DuplicateEntryError:
+			return _replayed(client_op_id)
+		except frappe.UniqueValidationError:
+			return _replayed(client_op_id)
+		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+	finally:
+		_unlock(lock)
 
 	if state == "Effective":
 		_push_to_registry(doc, ref, reason, ctx)
-
-	notify_da(
-		ref.da_id,
-		kind="Assignment",
-		title=_("Assigned to {0}").format(area.name_en)[:140]
-		if state == "Effective"
-		else _("Assignment to {0} flagged").format(area.name_en)[:140],
-		body=why if state == "Flagged" else (reason or None),
-		href="/assignments",
-		event="assignment_created" if state == "Effective" else "assignment_flagged",
-		reference_doctype="DA Kebele Assignment",
-		reference_name=doc.name,
-	)
+	_notify(doc, ref, area.name_en, state, why, reason)
 	doc.reload()
 	return serialize(doc)
+
+
+def _notify(doc, ref: DAReference, kebele_name: str, state: str, why: str, reason: str | None) -> None:
+	"""Best effort: a notification problem is logged, never fails the assignment."""
+	try:
+		notify_da(
+			ref.da_id,
+			kind="Assignment",
+			title=(
+				_("Assigned to {0}").format(kebele_name)
+				if state == "Effective"
+				else _("Assignment to {0} flagged").format(kebele_name)
+			)[:140],
+			body=why if state == "Flagged" else (reason or None),
+			href="/assignments",
+			event="assignment_created" if state == "Effective" else "assignment_flagged",
+			reference_doctype="DA Kebele Assignment",
+			reference_name=doc.name,
+		)
+	except Exception:
+		frappe.log_error(title=f"DA Kebele Assignment {doc.name}: notification failed")
 
 
 def _push_to_registry(doc, ref: DAReference, reason: str | None, ctx: ScopeContext) -> None:
@@ -409,9 +503,13 @@ def _push_to_registry(doc, ref: DAReference, reason: str | None, ctx: ScopeConte
 		doc.db_set("registry_sync_state", "Failed", update_modified=False)
 		doc.db_set("registry_error", f"{exc.__class__.__name__}: {exc}"[:500], update_modified=False)
 		return
+	# db_set on purpose: these are integration bookkeeping fields, not user input, and
+	# the row must not be re-validated or have its modified stamp moved by a sync result.
 	if result.accepted:
 		doc.db_set("registry_sync_state", "Accepted", update_modified=False)
 		doc.db_set("registry_reference", result.external_reference, update_modified=False)
+		if result.message:
+			doc.db_set("registry_error", result.message[:500], update_modified=False)  # warnings, if any
 	else:
 		doc.db_set("registry_sync_state", "Failed", update_modified=False)
 		doc.db_set("registry_error", (result.message or "rejected")[:500], update_modified=False)

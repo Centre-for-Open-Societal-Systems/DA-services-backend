@@ -18,11 +18,18 @@ def request_fields(kwargs: dict, *names: str, json_keys: tuple[str, ...] = ()) -
 	out = {n: data.get(n, kwargs.get(n)) for n in names}
 	for key in json_keys:
 		if isinstance(out.get(key), str):
+			if len(out[key]) > MAX_JSON_FIELD_CHARS:
+				frappe.throw(_("{0} is too large.").format(key), frappe.ValidationError)
 			try:
 				out[key] = json.loads(out[key])
 			except ValueError:
 				frappe.throw(_("{0} must be JSON.").format(key), frappe.ValidationError)
 	return out
+
+
+# A nested field (a location, a list of questions) is a few hundred bytes; anything
+# beyond this is not a form value and is refused before it is parsed.
+MAX_JSON_FIELD_CHARS = 10_000
 
 
 def truthy(value) -> bool:
