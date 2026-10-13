@@ -1,11 +1,20 @@
-"""Visits API: plan, list, detail timeline, reschedule, cancel (DA-43)."""
+"""Visits API: plan, list, detail timeline, reschedule, cancel (DA-43); check-in, outcome,
+evidence and weekly activity report (DA-44)."""
+
+import hashlib
+from io import BytesIO
 
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, today
+from PIL import Image
+from werkzeug.test import EnvironBuilder
+from werkzeug.wrappers import Request
 
 from da_services.api.v1 import visits as api
 from da_services.services import constants as C
+from da_services.services import visits as svc
+from da_services.utils.permissions import get_scope_context
 
 DA1 = "vapi-da1@da.local"  # DA-000001, ET04 / ET04-W01
 SUP = "vapi-sup@da.local"  # Supervisor ET04-W01
@@ -25,6 +34,13 @@ def _user(email, roles):
 		if r not in frappe.get_roles(email):
 			u.add_roles(r)
 	return email
+
+
+def _png(color: str) -> bytes:
+	"""A real (tiny) image: Frappe's File doctype opens image uploads to strip EXIF."""
+	buf = BytesIO()
+	Image.new("RGB", (2, 2), color).save(buf, "PNG")
+	return buf.getvalue()
 
 
 def _grant(user, role, **kw):
@@ -194,3 +210,143 @@ class TestVisitAPI(IntegrationTestCase):
 		out = api.cancel(v["name"], reason="Farmer moved")
 		self.assertEqual(out["status"], "success", out)
 		self.assertEqual(out["data"]["physical_status"], "Cancelled")
+
+	# -- DA-44: start / submit -----------------------------------------------------
+
+	def test_start_then_submit_creates_follow_ups_and_timeline(self):
+		frappe.set_user(DA1)
+		v = self._plan(date=today(), time="08:00")["data"]
+		out = api.start(v["name"], gps={"lat": 9.1236, "lng": 37.5671, "accuracy_m": 8}, client_op_id="st-1")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["data"]["physical_status"], "In progress")
+		self.assertEqual(frappe.db.get_value("DA Visit", v["name"], "gps_lat"), 9.1236)
+		# replay of the same check-in is accepted, not refused
+		self.assertEqual(api.start(v["name"], client_op_id="st-1")["status"], "success")
+
+		out = api.submit(
+			v["name"],
+			observed="Rust pustules on ~15% of the plot",
+			advice_given="Propiconazole within 3 days",
+			farmer_response="Will apply",
+			next_action={
+				"type": "Follow-up visit",
+				"note": "Check spray result",
+				"date": add_days(today(), 14),
+			},
+			client_op_id="sub-1",
+		)
+		self.assertEqual(out["status"], "success", out)
+		d = out["data"]
+		self.assertEqual(d["physical_status"], "Physical Visit Complete")
+		self.assertTrue(d["follow_up_task"] and d["follow_up_visit"])
+		self.assertEqual(frappe.db.count("DA Notification", {"user": DA1, "event": "task_created"}), 1)
+		labels = [e["label"] for e in api.get_visit(v["name"])["data"]["timeline"]]
+		self.assertEqual(labels, ["Planned", "In progress", "Physical Visit Complete"])
+
+	def test_submit_is_idempotent_on_client_op_id(self):
+		frappe.set_user(DA1)
+		v = self._plan(date=today(), time="08:00")["data"]
+		first = api.submit(
+			v["name"], observed="ok", next_action={"type": "Task", "note": "Bring seed"}, client_op_id="sub-9"
+		)
+		self.assertEqual(first["status"], "success", first)
+		again = api.submit(
+			v["name"], observed="ok", next_action={"type": "Task", "note": "Bring seed"}, client_op_id="sub-9"
+		)
+		self.assertEqual(again["status"], "success", again)
+		self.assertEqual(again["data"]["follow_up_task"], first["data"]["follow_up_task"])
+		self.assertEqual(frappe.db.count("DA Task", {"visit": v["name"]}), 1)
+		frappe.db.commit()  # nosemgrep: the error call below rolls back uncommitted rows
+		# a different operation on a closed visit is refused
+		self.assertEqual(api.submit(v["name"], observed="again", client_op_id="sub-10")["status"], "error")
+
+	def test_start_respects_scope(self):
+		frappe.set_user("Administrator")
+		other = self._plan(da_id="DA-000003")["data"]
+		frappe.db.commit()  # nosemgrep: the error call below rolls back uncommitted rows
+		frappe.set_user(DA1)
+		self.assertEqual(api.start(other["name"])["status"], "error")
+		self.assertEqual(frappe.response.get("http_status_code"), 403)
+
+	# -- DA-44: evidence -------------------------------------------------------------
+
+	def test_attachment_dedup_and_hash_check(self):
+		frappe.set_user(DA1)
+		v = self._plan(date=today(), time="08:00")["data"]
+		ctx = get_scope_context(DA1)
+		content = _png("red")
+		digest = hashlib.sha256(content).hexdigest()
+		row = svc.add_attachment(
+			v["name"],
+			content=content,
+			filename="plot.png",
+			kind="Crop",
+			gps={"lat": 9.1, "lng": 37.5},
+			ctx=ctx,
+		)
+		self.assertEqual((row["kind"], row["content_hash"], row["gps"]["lat"]), ("Crop", digest, 9.1))
+		self.assertTrue(row["file"].startswith("/private/files/"))
+		again = svc.add_attachment(v["name"], content=content, filename="plot-retry.png", ctx=ctx)
+		self.assertEqual(again["name"], row["name"])  # same bytes: same row
+		self.assertEqual(len(frappe.get_doc("DA Visit", v["name"]).attachments), 1)
+		with self.assertRaises(frappe.ValidationError):
+			svc.add_attachment(
+				v["name"], content=b"other", filename="x.jpg", content_hash="deadbeef", ctx=ctx
+			)
+		# evidence may still be added after the outcome is in
+		api.submit(v["name"], observed="done")
+		svc.add_attachment(v["name"], content=_png("green"), filename="after.png", kind="Land", ctx=ctx)
+		self.assertEqual(len(api.get_visit(v["name"])["data"]["attachments"]), 2)
+
+	def test_attachment_upload_over_multipart(self):
+		frappe.set_user(DA1)
+		v = self._plan(date=today(), time="08:00")["data"]
+		builder = EnvironBuilder(
+			method="POST",
+			path=f"/api/v1/da-services/visits/{v['name']}/attachments",
+			data={
+				"file": (BytesIO(_png("blue")), "farm.png"),
+				"kind": "Animal",
+				"lat": "9.2",
+				"lng": "37.6",
+			},
+		)
+		frappe.local.request = Request(builder.get_environ())
+		try:
+			out = api.add_attachment(v["name"])
+		finally:
+			frappe.local.request = None
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual((out["data"]["kind"], out["data"]["gps"]), ("Animal", {"lat": 9.2, "lng": 37.6}))
+		self.assertEqual(api.add_attachment(v["name"])["status"], "error")  # no multipart body
+
+	# -- DA-44: weekly activity report -----------------------------------------------
+
+	def test_activity_report_counts_the_week(self):
+		frappe.set_user(DA1)
+		a = self._plan(date=today(), time="08:00", visit_type="Advisory")["data"]
+		b = self._plan(date=today(), time="09:00", farmer_id="FRM-000102")["data"]
+		self._plan(date=today(), time="16:00", farmer_id="FRM-000103")  # planned, not done
+		api.submit(a["name"], observed="advice given", advice_given="Split urea")
+		api.submit(
+			b["name"],
+			observed="pests",
+			next_action={"type": "Task", "note": "Sample", "date": add_days(today(), 2)},
+		)
+		out = api.activity_report()
+		self.assertEqual(out["status"], "success", out)
+		r = out["data"]
+		self.assertEqual(r["da_id"], "DA-000001")
+		self.assertRegex(r["week"], r"^\d{4}-W\d{2}$")
+		self.assertEqual((r["visits_completed"], r["visits_planned"]), (2, 3))
+		self.assertEqual((r["farmers_reached"], r["advisories_issued"], r["follow_ups"]), (2, 1, 1))
+		self.assertEqual({o["farmer_id"] for o in r["outcomes"]}, {"FRM-000101", "FRM-000102"})
+		# explicit week and scope
+		self.assertEqual(api.activity_report(week=r["week"])["data"]["visits_completed"], 2)
+		self.assertEqual(api.activity_report(week="2020-W01")["data"]["visits_completed"], 0)
+		frappe.db.commit()  # nosemgrep: the error calls below roll back uncommitted rows
+		self.assertEqual(api.activity_report(week="bad")["status"], "error")
+		frappe.set_user(SUP)
+		self.assertEqual(api.activity_report(da_id="DA-000001")["data"]["visits_completed"], 2)
+		self.assertEqual(api.activity_report()["status"], "error")  # officer must name the DA
+		self.assertEqual(api.activity_report(da_id="DA-000003")["status"], "error")  # outside Woreda

@@ -8,11 +8,19 @@ Communications Officer has no access.
 
 from __future__ import annotations
 
+import hashlib
+from datetime import date, timedelta
+
 import frappe
 from frappe import _
 from frappe.utils import get_datetime, getdate, now_datetime
 
-from da_services.da_services.doctype.da_visit.da_visit import COMPLETE, OPEN_STATES, PLANNED_STATES
+from da_services.da_services.doctype.da_visit.da_visit import (
+	COMPLETE,
+	IN_PROGRESS,
+	OPEN_STATES,
+	PLANNED_STATES,
+)
 from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
 from da_services.utils.permissions import ScopeContext, require_roles
@@ -194,22 +202,188 @@ def get_visit(name: str, ctx: ScopeContext | None = None) -> dict:
 
 
 def start_visit(
-	name: str, *, arrived_at=None, gps: dict | None = None, farmer_present: bool = True, ctx=None
+	name: str,
+	*,
+	arrived_at=None,
+	gps: dict | None = None,
+	farmer_present: bool = True,
+	client_op_id: str | None = None,
+	ctx=None,
 ) -> dict:
 	ctx = ctx or require_roles(*WRITE_ROLES)
 	doc = _load_in_scope(name, ctx, write=True)
+	if client_op_id and doc.physical_status == IN_PROGRESS:
+		return serialize(doc)  # device replay of a check-in that already landed
 	doc.flags.ignore_permissions = True
 	doc.start_visit(arrived_at=arrived_at, gps=gps, farmer_present=farmer_present)
 	return serialize(doc)
 
 
-def submit_outcome(name: str, *, ctx=None, **outcome) -> dict:
+def submit_outcome(name: str, *, ctx=None, client_op_id: str | None = None, **outcome) -> dict:
 	ctx = ctx or require_roles(*WRITE_ROLES)
 	doc = _load_in_scope(name, ctx, write=True)
+	if client_op_id and doc.physical_status == COMPLETE and doc.outcome_client_op_id == client_op_id:
+		return serialize(doc)  # same device operation again: same answer, no second follow-up
 	doc.flags.ignore_permissions = True
 	doc.submit_outcome(**outcome)
+	if client_op_id:
+		doc.db_set("outcome_client_op_id", client_op_id, update_modified=False)
 	doc.reload()
 	return serialize(doc)
+
+
+def _attachment_dict(row) -> dict:
+	return {
+		"name": row.name,
+		"file": row.file,
+		"kind": row.kind,
+		"content_hash": row.content_hash,
+		"captured_at": row.captured_at.isoformat() if row.captured_at else None,
+		"gps": {"lat": row.gps_lat, "lng": row.gps_lng},
+		"sync_state": row.sync_state,
+	}
+
+
+def add_attachment(
+	name: str,
+	*,
+	content: bytes,
+	filename: str,
+	kind: str = "Crop",
+	gps: dict | None = None,
+	captured_at=None,
+	content_hash: str | None = None,
+	ctx=None,
+) -> dict:
+	"""Store one piece of geo-tagged evidence on a visit (HLD 9.2: duplicates by content hash).
+
+	The same bytes sent twice (a retry after a lost response) return the existing row.
+	A `content_hash` the device computed is checked against the bytes received, so a
+	corrupted upload is refused rather than stored.
+	"""
+	ctx = ctx or require_roles(*WRITE_ROLES)
+	if not content:
+		frappe.throw(_("file is required."), frappe.ValidationError)
+	doc = _load_in_scope(name, ctx, write=True)
+	if doc.physical_status not in (*OPEN_STATES, COMPLETE):
+		frappe.throw(_("Visit {0} is closed; evidence cannot be added.").format(name), frappe.ValidationError)
+	digest = hashlib.sha256(content).hexdigest()
+	if content_hash and content_hash.strip().lower() != digest:
+		frappe.throw(_("content_hash does not match the uploaded file."), frappe.ValidationError)
+	for row in doc.get("attachments") or []:
+		if row.content_hash == digest:
+			return _attachment_dict(row)
+	file_doc = frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": filename or f"{name}-{digest[:8]}",
+			"content": content,
+			"attached_to_doctype": "DA Visit",
+			"attached_to_name": doc.name,
+			"is_private": 1,
+		}
+	).insert(ignore_permissions=True)
+	gps = gps or {}
+	row = doc.append(
+		"attachments",
+		{
+			"file": file_doc.file_url,
+			"kind": kind or "Crop",
+			"content_hash": digest,
+			"captured_at": get_datetime(captured_at) if captured_at else now_datetime(),
+			"gps_lat": gps.get("lat"),
+			"gps_lng": gps.get("lng"),
+			"sync_state": "Accepted",
+		},
+	)
+	doc.flags.ignore_permissions = True
+	doc.save()
+	return _attachment_dict(row)
+
+
+def resolve_da_for_read(da_id: str | None, ctx: ScopeContext) -> str:
+	"""The DA-ID a report is about: a DA's own, or one an officer names inside their scope."""
+	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
+		own = sorted(ctx.da_ids)
+		if not own:
+			frappe.throw(_("Your account is not bound to a DA-ID."), frappe.PermissionError)
+		return own[0]
+	if not da_id:
+		frappe.throw(_("da_id is required."), frappe.ValidationError)
+	get_da_reference(da_id, ctx)
+	return da_id
+
+
+def _week_range(week: str | None) -> tuple[date, date, str]:
+	"""Monday..Sunday of an ISO week ("2026-W42"); the current week when not given."""
+	if week:
+		try:
+			y, w = week.strip().upper().split("-W")
+			start = date.fromisocalendar(int(y), int(w), 1)
+		except ValueError, AttributeError:
+			frappe.throw(_("week must look like 2026-W42."), frappe.ValidationError)
+	else:
+		iso = getdate().isocalendar()
+		start = date.fromisocalendar(iso[0], iso[1], 1)
+	iso = start.isocalendar()
+	return start, start + timedelta(days=6), f"{iso[0]}-W{iso[1]:02d}"
+
+
+def activity_report(
+	ctx: ScopeContext | None = None, *, week: str | None = None, da_id: str | None = None
+) -> dict:
+	"""Weekly activity report (docs/api-da-screens.md 2.9) from DA Visit and DA Task.
+
+	`issues_raised` stays 0 until grievances are linked to visits (DA Grievance Link).
+	"""
+	ctx = ctx or require_roles(*READ_ROLES)
+	da_id = resolve_da_for_read(da_id, ctx)
+	start, end, label = _week_range(week)
+	rng = ("between", [f"{start} 00:00:00", f"{end} 23:59:59"])
+	done = frappe.get_all(
+		"DA Visit",
+		filters={"da_id": da_id, "physical_status": COMPLETE, "completed_at": rng},
+		fields=[
+			"name",
+			"farmer_id",
+			"kebele",
+			"visit_type",
+			"purpose",
+			"outcome",
+			"advice_given",
+			"follow_up_task",
+			"completed_at",
+		],
+		order_by="completed_at desc",
+	)
+	planned = frappe.db.count(
+		"DA Visit", {"da_id": da_id, "scheduled_at": rng, "physical_status": ("in", list(PLANNED_STATES))}
+	)
+	return {
+		"da_id": da_id,
+		"week": label,
+		"from": str(start),
+		"to": str(end),
+		"visits_completed": len(done),
+		"visits_planned": planned,
+		"farmers_reached": len({r.farmer_id for r in done if r.farmer_id}),
+		"advisories_issued": sum(
+			1 for r in done if r.visit_type == "Advisory" or (r.advice_given or "").strip()
+		),
+		"issues_raised": 0,
+		"follow_ups": sum(1 for r in done if r.follow_up_task),
+		"outcomes": [
+			{
+				"visit_id": r.name,
+				"farmer_id": r.farmer_id,
+				"kebele": r.kebele,
+				"purpose": r.purpose or r.visit_type,
+				"summary": r.outcome,
+				"completed_at": r.completed_at.isoformat() if r.completed_at else None,
+			}
+			for r in done
+		],
+	}
 
 
 def reschedule_visit(name: str, *, scheduled_at, reason: str | None = None, ctx=None) -> dict:

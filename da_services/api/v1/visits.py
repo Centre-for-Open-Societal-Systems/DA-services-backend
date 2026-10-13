@@ -6,7 +6,16 @@ GET  /api/v1/da-services/visits/<visit_id>           one visit + status timeline
 POST /api/v1/da-services/visits/<visit_id>/reschedule {scheduled_at | date+time, reason}
 POST /api/v1/da-services/visits/<visit_id>/cancel     {reason}
 
-Check-in and outcome (`/start`, `/outcome`) are DA-44. The plan body accepts either
+DA-44 (outcome and activity report):
+
+POST /api/v1/da-services/visits/<visit_id>/start       {arrived_at, gps {lat, lng, accuracy_m}, farmer_present, client_op_id}
+POST /api/v1/da-services/visits/<visit_id>/submit      {purpose, farmer_response, observed, advice_given,
+                                                        inputs_actions, next_action {type, note, date},
+                                                        advisory_qa[], client_op_id}
+POST /api/v1/da-services/visits/<visit_id>/attachments multipart: file + kind, lat, lng, captured_at, content_hash
+GET  /api/v1/da-services/reports/activity?week=2026-W42[&da_id=]
+
+The plan body accepts either
 `scheduled_at` or the form's separate `date` + `time`. `notify_farmer_sms` is recorded
 on the visit; the SMS itself needs the gateway (not yet available) and is sent by a
 later job, never from this request. `location` comes from the client (the farmer's
@@ -53,7 +62,7 @@ def _body(kwargs: dict, *names: str) -> dict:
 	request = getattr(frappe.local, "request", None)
 	data = (request.get_json(silent=True) if request is not None else None) or {}
 	out = {n: data.get(n, kwargs.get(n)) for n in names}
-	for key in ("location", "advisory_qa"):
+	for key in ("location", "advisory_qa", "gps", "next_action"):
 		if isinstance(out.get(key), str):
 			try:
 				out[key] = json.loads(out[key])
@@ -194,3 +203,91 @@ def cancel(visit_id: str, **kwargs):
 	b = _body(kwargs, "reason")
 	out = svc.cancel_visit(visit_id, reason=b.get("reason"), ctx=ctx)
 	return success_response(data=out, message="Visit cancelled")
+
+
+# -- DA-44: check-in, outcome, evidence, weekly report ---------------------------------
+
+
+@route("/visits/<visit_id>/start", methods=("POST",), summary="Check in at the farm")
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def start(visit_id: str, **kwargs):
+	ctx = require_roles(*svc.WRITE_ROLES)
+	b = _body(kwargs, "arrived_at", "gps", "farmer_present", "client_op_id")
+	present = True if b.get("farmer_present") is None else _truthy(b.get("farmer_present"))
+	out = svc.start_visit(
+		visit_id,
+		arrived_at=b.get("arrived_at"),
+		gps=b.get("gps") or None,
+		farmer_present=present,
+		client_op_id=b.get("client_op_id") or None,
+		ctx=ctx,
+	)
+	return success_response(data=out, message="Visit started")
+
+
+@route("/visits/<visit_id>/submit", methods=("POST",), summary="Submit the visit outcome")
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def submit(visit_id: str, **kwargs):
+	ctx = require_roles(*svc.WRITE_ROLES)
+	b = _body(
+		kwargs,
+		"purpose",
+		"farmer_response",
+		"observed",
+		"advice_given",
+		"inputs_actions",
+		"next_action",
+		"advisory_qa",
+		"client_op_id",
+	)
+	out = svc.submit_outcome(
+		visit_id,
+		purpose=b.get("purpose"),
+		farmer_response=b.get("farmer_response"),
+		observed=b.get("observed"),
+		advice_given=b.get("advice_given"),
+		inputs_actions=b.get("inputs_actions"),
+		next_action=b.get("next_action") or None,
+		advisory_qa=b.get("advisory_qa"),
+		client_op_id=b.get("client_op_id") or None,
+		ctx=ctx,
+	)
+	return success_response(data=out, message="Visit outcome submitted")
+
+
+@route("/visits/<visit_id>/attachments", methods=("POST",), status=201, summary="Upload geo-tagged evidence")
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def add_attachment(visit_id: str, **kwargs):
+	ctx = require_roles(*svc.WRITE_ROLES)
+	request = getattr(frappe.local, "request", None)
+	upload = request.files.get("file") if request is not None and request.files else None
+	if upload is None:
+		frappe.throw(_("file is required (multipart/form-data)."), frappe.ValidationError)
+	form = request.form or {}
+	f = {n: form.get(n, kwargs.get(n)) for n in ("kind", "lat", "lng", "captured_at", "content_hash")}
+	gps = None
+	if f.get("lat") not in (None, "") and f.get("lng") not in (None, ""):
+		gps = {"lat": float(f["lat"]), "lng": float(f["lng"])}
+	out = svc.add_attachment(
+		visit_id,
+		content=upload.read(),
+		filename=upload.filename,
+		kind=f.get("kind") or "Crop",
+		gps=gps,
+		captured_at=f.get("captured_at"),
+		content_hash=f.get("content_hash"),
+		ctx=ctx,
+	)
+	return success_response(data=out, message="Evidence stored")
+
+
+@route("/reports/activity", methods=("GET",), summary="Weekly activity report")
+@frappe.whitelist()
+@handle_api_errors
+def activity_report(**kwargs):
+	ctx = require_roles(*svc.READ_ROLES)
+	q = _body(kwargs, "week", "da_id")
+	return success_response(data=svc.activity_report(ctx, week=q.get("week"), da_id=q.get("da_id")))
