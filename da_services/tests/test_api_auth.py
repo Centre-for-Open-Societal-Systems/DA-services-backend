@@ -14,6 +14,7 @@ from da_services.api.v1 import me as me_api
 from da_services.api.v1 import profile as profile_api
 from da_services.api.v1 import rbac as rbac_api
 from da_services.services import constants as C
+from da_services.utils.permissions import ScopeContext
 
 ADMIN = "test-oan-admin@da.local"
 SUP = "test-sup-auth@da.local"
@@ -133,15 +134,65 @@ class TestMe(_Base):
 		self.assertEqual(d["roles"], [C.ROLE_SUPERVISOR])
 		self.assertEqual(d["scope"]["woredas"], ["ET04-W01"])
 		self.assertIsNone(d["da_id"])
-		self.assertIn("approvals", d["menu"])
-		self.assertNotIn("admin/users", d["menu"])
+		self.assertEqual(d["role"], "Supervisor")
+		self.assertEqual(d["role_label"], "Supervisor (Woreda)")
+		self.assertEqual(d["scope_label"], "Woreda · ET04-W01")
+		self.assertEqual(d["user"]["email"], SUP)
+		# frontend hrefs (lib/rbac.ts NAV_GROUPS), in nav order
+		self.assertEqual(d["menu"][0], "/dashboard")
+		self.assertIn("/assignments", d["menu"])
+		self.assertNotIn("/approvals", d["menu"])  # Admin only in the portal
+		self.assertNotIn("/admin/users", d["menu"])
 
 	def test_da_profile_includes_registry_record(self):
 		frappe.set_user(DA_USER)
 		d = me_api.get_me()["data"]
 		self.assertEqual(d["da_id"], "DA-000001")
 		self.assertEqual(d["agent"]["full_name"], "Abebe Kebede")
-		self.assertNotIn("approvals", d["menu"])
+		self.assertEqual(d["role"], "DA")
+		self.assertEqual(d["scope_label"], "Own record · ET04-W01")
+		agent = d["agent"]
+		self.assertEqual(
+			(agent["phone"], agent["specialisation"], agent["joined_at"], agent["farmer_count"]),
+			("+251911000001", "Crop production", "2019-09-01", 128),
+		)
+		self.assertIn("/my-teams", d["menu"])
+		self.assertNotIn("/approvals", d["menu"])
+		self.assertNotIn("/agents", d["menu"])
+
+	def test_administrator_is_admin_with_full_menu(self):
+		frappe.set_user("Administrator")
+		d = me_api.get_me()["data"]
+		self.assertEqual((d["role"], d["scope_label"]), ("Admin", "All regions"))
+		self.assertIn("/approvals", d["menu"])
+		self.assertIn("/admin/settings", d["menu"])
+		self.assertNotIn("/my-teams", d["menu"])
+
+	def test_scope_labels_per_role(self):
+		def ctx(roles, **kw):
+			return ScopeContext(user="x@da.local", roles=frozenset(roles), unrestricted=False, **kw)
+
+		exec_ctx = ctx({C.ROLE_EXECUTIVE}, region_scopes=frozenset({"ET03"}))
+		self.assertEqual(me_api.role_codes_for(exec_ctx), ["Executive"])
+		self.assertEqual(me_api.scope_label_for("Executive", exec_ctx), "Region · ET03 (read)")
+		zone_ctx = ctx(
+			{C.ROLE_SUPERVISOR}, region_scopes=frozenset({"ET04"}), zone_scopes=frozenset({"ET04-Z01"})
+		)
+		self.assertEqual(me_api.scope_label_for("Supervisor", zone_ctx), "Zone · ET04-Z01")
+		comms = ctx({C.ROLE_COMMS})
+		self.assertEqual(me_api.scope_label_for("CommsOfficer", comms), "Broadcast domain")
+		self.assertEqual(me_api.menu_for(comms), ["/dashboard", "/knowledge", "/broadcast", "/alerts"])
+		# two roles: the widest one wins, the menu is the union
+		both = ctx({C.ROLE_DA, C.ROLE_SUPERVISOR}, woreda_scopes=frozenset({"ET04-W01"}))
+		self.assertEqual(me_api.role_codes_for(both), ["Supervisor", "DA"])
+		self.assertTrue({"/my-teams", "/assignments"} <= set(me_api.menu_for(both)))
+
+	def test_menu_hrefs_match_the_portal_nav(self):
+		hrefs = [href for href, _roles in me_api.NAV]
+		self.assertTrue(all(h.startswith("/") for h in hrefs))
+		self.assertEqual(len(hrefs), len(set(hrefs)))
+		for _href, roles in me_api.NAV:
+			self.assertTrue(set(roles) <= set(me_api.ROLE_LABELS))
 
 	def test_user_without_assignment_is_denied(self):
 		frappe.set_user(PLAIN)

@@ -27,6 +27,10 @@ FIXTURE_DAS: dict[str, dict] = {
 		"assigned_kebele": "ET04-W01-K03",
 		"education_tier": "Diploma",
 		"fayda_status": "Verified",
+		"phone": "+251911000001",
+		"specialisation": "Crop production",
+		"joined_at": "2019-09-01",
+		"farmer_count": 128,
 		"version": 3,
 	},
 	"DA-000002": {
@@ -40,6 +44,10 @@ FIXTURE_DAS: dict[str, dict] = {
 		"assigned_kebele": "ET04-W01-K07",
 		"education_tier": "Degree",
 		"fayda_status": "Verified",
+		"phone": "+251911000002",
+		"specialisation": "Livestock",
+		"joined_at": "2017-03-15",
+		"farmer_count": 96,
 		"version": 5,
 	},
 	"DA-000003": {
@@ -53,6 +61,10 @@ FIXTURE_DAS: dict[str, dict] = {
 		"assigned_kebele": None,
 		"education_tier": "Diploma",
 		"fayda_status": "Verified",
+		"phone": "+251911000003",
+		"specialisation": "Natural resources",
+		"joined_at": "2012-01-10",
+		"farmer_count": 0,
 		"version": 9,
 	},
 	"DA-000004": {
@@ -66,6 +78,10 @@ FIXTURE_DAS: dict[str, dict] = {
 		"assigned_kebele": "ET03-W02-K01",
 		"education_tier": "Degree",
 		"fayda_status": "Pending",
+		"phone": "+251911000004",
+		"specialisation": "Crop production",
+		"joined_at": "2026-07-01",
+		"farmer_count": 0,
 		"version": 1,
 	},
 }

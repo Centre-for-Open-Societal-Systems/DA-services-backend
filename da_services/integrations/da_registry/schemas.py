@@ -27,6 +27,11 @@ class DAReference:
 	kebele: str | None = None
 	education_tier: str | None = None
 	fayda_status: str | None = None  # Verified / Pending / Mismatch (col 4)
+	# Shown in the portal header, My Teams and Assignments (docs/api-da-screens.md 1.1, 2.12).
+	phone: str | None = None
+	specialisation: str | None = None
+	joined_at: str | None = None  # ISO date the DA joined service
+	farmer_count: int | None = None  # farmers linked to the DA's Kebele(s)
 	source_version: str | None = None  # registry record version, for optimistic checks
 	fetched_at: datetime | None = None
 

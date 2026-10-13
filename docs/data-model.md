@@ -168,8 +168,9 @@ registry per row (NFR: search p95 ≤ 2 s). Requires decision B1 (integration pa
 Permissions: read for Supervisor (scoped by Woreda), Executive (Region), Admin; no
 create/write for anyone (sync writes with `ignore_permissions`).
 
-The `DAReference` dataclass in `integrations/da_registry/schemas.py` must grow the same
-way: `phone`, `specialisation`, `joined_on`, `farmer_count`, `supervisor` *(UI)*.
+The `DAReference` dataclass in `integrations/da_registry/schemas.py` now carries `phone`,
+`specialisation`, `joined_at` (the API name for `joined_on`) and `farmer_count` (DA-197,
+mock values until the registry contract lands); `supervisor` *(UI)* is still to add, with My Teams.
 
 ### 4.4 DA Profile Change Request
 
