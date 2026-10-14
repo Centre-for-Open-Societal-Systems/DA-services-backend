@@ -221,27 +221,55 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			)
 			raise
 
-	def update_farmer(self, farmer_id: str, updates: dict) -> dict:
-		"""Update farmer via HTTP PUT.
+	def update_farmer(self, farmer_id: str, updates: dict, expected_version: int | None = None) -> dict:
+		"""Update farmer via HTTP PATCH with version checking (DA-41).
 
 		Args:
 		    farmer_id: Farmer Registry internal_record_id
 		    updates: Dictionary of fields to update
+		    expected_version: Expected current version for optimistic concurrency
 
 		Returns:
-		    Updated farmer data as dict
+		    Update result dict with version info or conflict flag
 
 		Raises:
 		    requests.RequestException: If HTTP request fails
 		"""
 		url = self._build_url("update_farmer", farmer_id=farmer_id)
 
+		# Add version header if provided
+		headers = dict(self.headers)
+		if expected_version is not None:
+			headers["If-Match"] = f'"{expected_version}"'
+
 		try:
-			response = requests.put(url, headers=self.headers, json=updates, timeout=self.timeout)
+			response = requests.patch(url, headers=headers, json=updates, timeout=self.timeout)
+
+			# Handle version conflict (409 Conflict)
+			if response.status_code == 409:
+				conflict_data = response.json()
+				return {
+					"success": False,
+					"conflict": True,
+					"farmer_id": farmer_id,
+					"expected_version": expected_version,
+					"current_version": conflict_data.get("current_version"),
+					"current_data": conflict_data.get("current_data", {}),
+					"message": conflict_data.get("message", "Version conflict"),
+				}
+
+			# Raise for other errors
 			response.raise_for_status()
 
-			# Return updated farmer data
-			return response.json()
+			# Success
+			result = response.json()
+			return {
+				"success": True,
+				"conflict": False,
+				"farmer_id": farmer_id,
+				"version": result.get("version"),
+				"message": result.get("message", "Update successful"),
+			}
 
 		except requests.RequestException as e:
 			frappe.log_error(

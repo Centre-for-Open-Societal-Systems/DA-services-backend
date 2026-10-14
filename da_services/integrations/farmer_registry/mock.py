@@ -6,7 +6,7 @@ without a live Farmer Registry instance.
 
 from datetime import date, datetime
 
-from .client import FarmerRegistryClient
+from .client import FarmerRegistryClient, FarmerRegistryError
 from .schemas import Farmer, FarmerListItem, Plot
 
 # Mock farmer data matching Farmer Registry schema
@@ -193,11 +193,51 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 		"""Get mock plots for a farmer."""
 		return MOCK_PLOTS.get(farmer_id, [])
 
-	def update_farmer(self, farmer_id: str, updates: dict) -> dict:
-		"""Mock update (for DA-41, not implemented yet)."""
+	def update_farmer(self, farmer_id: str, updates: dict, expected_version: int | None = None) -> dict:
+		"""Mock update with version conflict simulation (for DA-41).
+
+		Simulates version conflict if expected_version is provided but doesn't match.
+		In mock mode, we simulate versions but don't actually persist changes.
+
+		Args:
+		    farmer_id: Farmer Registry internal_record_id
+		    updates: Dict of field:value pairs to update
+		    expected_version: Expected current version (for testing conflicts)
+
+		Returns:
+		    Update result with version info or conflict flag
+		"""
+		# Get current farmer data (from mock or DA Farmer Reference cache)
+		current_farmer = self.get_farmer(farmer_id)
+		if not current_farmer:
+			raise FarmerRegistryError(f"Farmer {farmer_id} not found")
+
+		# Get version (default to 1 if not present)
+		current_version = getattr(current_farmer, "version", 1)
+
+		# Simulate version conflict detection
+		if expected_version is not None and expected_version != current_version:
+			# Version mismatch - return conflict
+			# Convert Pydantic model to dict if needed
+			current_data = (
+				current_farmer.model_dump() if hasattr(current_farmer, "model_dump") else current_farmer
+			)
+			return {
+				"success": False,
+				"conflict": True,
+				"farmer_id": farmer_id,
+				"expected_version": expected_version,
+				"current_version": current_version,
+				"current_data": current_data,
+				"message": f"Version conflict: expected v{expected_version}, server has v{current_version}",
+			}
+
+		# Success - return new version
+		new_version = current_version + 1
 		return {
 			"success": True,
+			"conflict": False,
 			"farmer_id": farmer_id,
-			"version": 1,
-			"message": "Mock update - not persisted",
+			"version": new_version,
+			"message": f"Mock update successful - version updated to v{new_version}",
 		}
