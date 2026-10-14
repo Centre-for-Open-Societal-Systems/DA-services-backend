@@ -195,11 +195,19 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 	            "total": 15
 	        }
 	    }
+
+	Raises:
+	    DoesNotExistError: Farmer not found
+	    PermissionError: Farmer not in scope
 	"""
-	_ = require_roles(*READ_ROLES)
+	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
+
+	# Scope check: Ensure farmer is in user's scope before showing visits
+	# This prevents a DA from reading another DA's farmer visits
+	farmers.get_farmer_profile(farmer_id, ctx)
 
 	# Validate pagination
 	try:
@@ -294,11 +302,18 @@ def get_farmer_plots(farmer_id: str):
 	            ]
 	        }
 	    }
+
+	Raises:
+	    DoesNotExistError: Farmer not found
+	    PermissionError: Farmer not in scope
 	"""
-	_ = require_roles(*READ_ROLES)
+	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
+
+	# Scope check: Ensure farmer is in user's scope before showing plots
+	farmers.get_farmer_profile(farmer_id, ctx)
 
 	# Get plots from Farmer Registry
 	client = get_farmer_registry_client()

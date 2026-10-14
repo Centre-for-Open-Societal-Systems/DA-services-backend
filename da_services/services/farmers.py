@@ -40,16 +40,26 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 	if not ref:
 		frappe.throw(_("Farmer {0} not found.").format(farmer_id), frappe.DoesNotExistError)
 
-	# Check scope: Farmer must be in user's region/woreda
+	# Check scope: Farmer must be in user's region/woreda/zone
 	if not ctx.unrestricted:
-		# Get single woreda/region from the scopes set
-		woreda_scope = next(iter(ctx.woreda_scopes), None) if ctx.woreda_scopes else None
-		region_scope = next(iter(ctx.region_scopes), None) if ctx.region_scopes else None
+		farmer_region = ref.get("region")
+		farmer_woreda = ref.get("woreda")
+		farmer_zone = ref.get("zone")
 
-		if woreda_scope and ref.get("woreda") != woreda_scope:
-			frappe.throw(_("Farmer is not in your Woreda scope."), frappe.PermissionError)
-		elif region_scope and ref.get("region") != region_scope:
-			frappe.throw(_("Farmer is not in your Region scope."), frappe.PermissionError)
+		covered, reason = ctx.scope_decision(
+			region=farmer_region, woreda=farmer_woreda, zone=farmer_zone
+		)
+
+		if not covered:
+			from da_services.utils.permissions import SCOPE_UNRESOLVED
+
+			if reason == SCOPE_UNRESOLVED:
+				frappe.throw(
+					_("Cannot verify farmer scope: missing Woreda or Zone data."),
+					frappe.PermissionError,
+				)
+			else:
+				frappe.throw(_("Farmer is not in your scope."), frappe.PermissionError)
 
 	# Get visit data (last visit, pending tasks)
 	visit_data = _get_farmer_visit_data(farmer_id)
@@ -117,9 +127,29 @@ def list_farmers(
 			elif region_scope:
 				filters["region"] = region_scope
 
-	# User filters
+	# User filters - must not override scope
+	# Woreda filter can only narrow within the scope, not expand it
 	if woreda:
-		filters["woreda"] = woreda
+		if not ctx.unrestricted:
+			# Validate that requested woreda is within scope
+			if ctx.has_any_role(C.ROLE_DA):
+				# DA scope is linked farmers, woreda filter is additional narrowing
+				pass  # Already filtered by linked farmers above
+			elif ctx.woreda_scopes and woreda not in ctx.woreda_scopes:
+				# Supervisor trying to query outside their Woreda
+				frappe.throw(
+					_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError
+				)
+			elif ctx.region_scopes and filters.get("region") != woreda[:4]:
+				# Executive trying to query Woreda outside their Region
+				# Assuming Woreda codes start with Region code (e.g., ET04-W01)
+				# This may need adjustment based on actual code structure
+				pass
+			# Apply the filter only if it's within scope
+			filters["woreda"] = woreda
+		else:
+			filters["woreda"] = woreda
+
 	if kebele:
 		filters["kebele"] = kebele
 	if state:
