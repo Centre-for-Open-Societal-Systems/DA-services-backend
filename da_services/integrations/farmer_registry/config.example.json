@@ -1,0 +1,33 @@
+{
+  "_comment": "Farmer Registry Integration Configuration Example",
+  "_comment2": "Copy relevant settings to sites/<your-site>/site_config.json",
+
+  "farmer_registry_backend": "http",
+  "farmer_registry_url": "http://farmer-registry:8080",
+  "farmer_registry_api_key": "your-secret-api-key-here",
+  "farmer_registry_api_version": "v1",
+  "farmer_registry_timeout": 30,
+
+  "farmer_registry_endpoints": {
+    "get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
+    "list_farmers": "/api/{version}/registry/farmer",
+    "get_plots": "/api/{version}/registry/land",
+    "update_farmer": "/api/{version}/registry/farmer/{farmer_id}"
+  },
+
+  "_environments": {
+    "development": {
+      "farmer_registry_backend": "mock"
+    },
+    "staging": {
+      "farmer_registry_backend": "http",
+      "farmer_registry_url": "https://staging-farmer-registry.example.com",
+      "farmer_registry_api_key": "staging-key"
+    },
+    "production": {
+      "farmer_registry_backend": "http",
+      "farmer_registry_url": "https://farmer-registry.production.com",
+      "farmer_registry_api_key": "production-key"
+    }
+  }
+}
