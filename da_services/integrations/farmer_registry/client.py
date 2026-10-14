@@ -5,7 +5,6 @@ defines the operations; implementations (mock, HTTP) are swapped via factory.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 import frappe
 
@@ -16,7 +15,7 @@ class FarmerRegistryClient(ABC):
     """Abstract interface to the Farmer Registry."""
 
     @abstractmethod
-    def get_farmer(self, farmer_id: str) -> Optional[Farmer]:
+    def get_farmer(self, farmer_id: str) -> Farmer | None:
         """Get a single farmer by ID.
 
         Args:
@@ -31,12 +30,12 @@ class FarmerRegistryClient(ABC):
     def list_farmers(
         self,
         *,
-        woreda: Optional[str] = None,
-        kebele: Optional[str] = None,
-        state: Optional[str] = None,
+        woreda: str | None = None,
+        kebele: str | None = None,
+        state: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[List[FarmerListItem], int]:
+    ) -> tuple[list[FarmerListItem], int]:
         """List farmers with filters.
 
         Args:
@@ -52,7 +51,7 @@ class FarmerRegistryClient(ABC):
         pass
 
     @abstractmethod
-    def get_farmer_plots(self, farmer_id: str) -> List[Plot]:
+    def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
         """Get land plots for a farmer.
 
         Args:

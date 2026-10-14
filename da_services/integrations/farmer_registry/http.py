@@ -20,8 +20,8 @@ Configuration Example:
 
 from typing import List, Optional
 
-import requests
 import frappe
+import requests
 from frappe import _
 
 from .client import FarmerRegistryClient
@@ -92,7 +92,7 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
         return f"{self.base_url}{path}"
 
-    def get_farmer(self, farmer_id: str) -> Optional[Farmer]:
+    def get_farmer(self, farmer_id: str) -> Farmer | None:
         """Get farmer details via HTTP GET.
 
         Args:
@@ -123,19 +123,19 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
         except requests.RequestException as e:
             frappe.log_error(
                 title="Farmer Registry HTTP Error",
-                message=f"Failed to get farmer {farmer_id} from {url}: {str(e)}"
+                message=f"Failed to get farmer {farmer_id} from {url}: {e!s}"
             )
             raise
 
     def list_farmers(
         self,
         *,
-        woreda: Optional[str] = None,
-        kebele: Optional[str] = None,
-        state: Optional[str] = None,
+        woreda: str | None = None,
+        kebele: str | None = None,
+        state: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[List[FarmerListItem], int]:
+    ) -> tuple[list[FarmerListItem], int]:
         """List farmers via HTTP GET with query parameters.
 
         Args:
@@ -181,11 +181,11 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
         except requests.RequestException as e:
             frappe.log_error(
                 title="Farmer Registry HTTP Error",
-                message=f"Failed to list farmers from {url}: {str(e)}"
+                message=f"Failed to list farmers from {url}: {e!s}"
             )
             raise
 
-    def get_farmer_plots(self, farmer_id: str) -> List[Plot]:
+    def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
         """Get farmer's land plots via HTTP GET.
 
         Args:
@@ -218,7 +218,7 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
         except requests.RequestException as e:
             frappe.log_error(
                 title="Farmer Registry HTTP Error",
-                message=f"Failed to get plots for {farmer_id} from {url}: {str(e)}"
+                message=f"Failed to get plots for {farmer_id} from {url}: {e!s}"
             )
             raise
 
@@ -247,6 +247,6 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
         except requests.RequestException as e:
             frappe.log_error(
                 title="Farmer Registry HTTP Error",
-                message=f"Failed to update farmer {farmer_id} at {url}: {str(e)}"
+                message=f"Failed to update farmer {farmer_id} at {url}: {e!s}"
             )
             raise

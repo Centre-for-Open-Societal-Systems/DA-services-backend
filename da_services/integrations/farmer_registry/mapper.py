@@ -8,7 +8,7 @@ from typing import Any, Dict
 from .schemas import Farmer
 
 
-def farmer_to_reference_dict(farmer: Farmer) -> Dict[str, Any]:
+def farmer_to_reference_dict(farmer: Farmer) -> dict[str, Any]:
     """Map Farmer Registry schema → DA Farmer Reference fields.
 
     Args:
@@ -42,7 +42,7 @@ def farmer_to_reference_dict(farmer: Farmer) -> Dict[str, Any]:
     }
 
 
-def reference_dict_to_profile(ref_dict: Dict[str, Any], visit_data: Dict[str, Any]) -> Dict[str, Any]:
+def reference_dict_to_profile(ref_dict: dict[str, Any], visit_data: dict[str, Any]) -> dict[str, Any]:
     """Merge farmer reference + visit data → profile response (DA-40).
 
     Args:

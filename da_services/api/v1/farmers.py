@@ -196,7 +196,7 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
             }
         }
     """
-    ctx = require_roles(*READ_ROLES)
+    _ = require_roles(*READ_ROLES)
 
     if not farmer_id:
         frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
@@ -295,7 +295,7 @@ def get_farmer_plots(farmer_id: str):
             }
         }
     """
-    ctx = require_roles(*READ_ROLES)
+    _ = require_roles(*READ_ROLES)
 
     if not farmer_id:
         frappe.throw(_("Farmer ID is required."), frappe.ValidationError)

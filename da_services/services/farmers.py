@@ -75,13 +75,13 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 def list_farmers(
     ctx: ScopeContext,
     *,
-    woreda: Optional[str] = None,
-    kebele: Optional[str] = None,
-    state: Optional[str] = None,
-    da_id: Optional[str] = None,
+    woreda: str | None = None,
+    kebele: str | None = None,
+    state: str | None = None,
+    da_id: str | None = None,
     limit: int = 50,
     start: int = 0,
-) -> Tuple[list, int]:
+) -> tuple[list, int]:
     """List farmers visible to the user (DA-40 farmers list).
 
     Scope enforcement:
@@ -222,7 +222,7 @@ def check_farmer_edit_permissions(farmer_id: str, ctx: ScopeContext) -> dict:
     }
 
 
-def _get_or_sync_farmer_reference(farmer_id: str) -> Optional[dict]:
+def _get_or_sync_farmer_reference(farmer_id: str) -> dict | None:
     """Get farmer from cache, or fetch and cache from registry.
 
     Args:
@@ -315,7 +315,7 @@ def _get_farmer_visit_count(farmer_id: str) -> int:
     return frappe.db.count("DA Visit", {"farmer_id": farmer_id})
 
 
-def _get_last_visit_date(farmer_id: str) -> Optional[str]:
+def _get_last_visit_date(farmer_id: str) -> str | None:
     """Get last visit date for a farmer."""
     return frappe.db.get_value(
         "DA Visit",

@@ -10,7 +10,6 @@ from typing import List, Optional
 from .client import FarmerRegistryClient
 from .schemas import Farmer, FarmerListItem, Plot
 
-
 # Mock farmer data matching Farmer Registry schema
 MOCK_FARMERS = {
     "farmer-uuid-001": Farmer(
@@ -143,19 +142,19 @@ MOCK_PLOTS = {
 class MockFarmerRegistryClient(FarmerRegistryClient):
     """Mock implementation for development without live Farmer Registry."""
 
-    def get_farmer(self, farmer_id: str) -> Optional[Farmer]:
+    def get_farmer(self, farmer_id: str) -> Farmer | None:
         """Get farmer from mock fixtures."""
         return MOCK_FARMERS.get(farmer_id)
 
     def list_farmers(
         self,
         *,
-        woreda: Optional[str] = None,
-        kebele: Optional[str] = None,
-        state: Optional[str] = None,
+        woreda: str | None = None,
+        kebele: str | None = None,
+        state: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[List[FarmerListItem], int]:
+    ) -> tuple[list[FarmerListItem], int]:
         """List mock farmers with filters."""
         farmers = list(MOCK_FARMERS.values())
 
@@ -191,7 +190,7 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 
         return items, total
 
-    def get_farmer_plots(self, farmer_id: str) -> List[Plot]:
+    def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
         """Get mock plots for a farmer."""
         return MOCK_PLOTS.get(farmer_id, [])
 
