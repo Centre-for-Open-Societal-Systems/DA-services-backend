@@ -59,10 +59,10 @@ Endpoint templates support placeholders:
 
 ```python
 {
-    "get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
-    "list_farmers": "/api/{version}/registry/farmer",
-    "get_plots": "/api/{version}/registry/land",
-    "update_farmer": "/api/{version}/registry/farmer/{farmer_id}"
+	"get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
+	"list_farmers": "/api/{version}/registry/farmer",
+	"get_plots": "/api/{version}/registry/land",
+	"update_farmer": "/api/{version}/registry/farmer/{farmer_id}",
 }
 ```
 
@@ -183,6 +183,7 @@ frappe.conf.get("farmer_registry_backend")
 
 # Test connection
 import requests
+
 response = requests.get(f"{base_url}/health")
 ```
 
@@ -213,10 +214,11 @@ All HTTP errors are logged to Frappe's error log:
 
 ```python
 # View recent errors
-frappe.get_all("Error Log", 
-    filters={"error": ["like", "%Farmer Registry%"]},
-    fields=["creation", "error"],
-    order_by="creation desc",
-    limit=10
+frappe.get_all(
+	"Error Log",
+	filters={"error": ["like", "%Farmer Registry%"]},
+	fields=["creation", "error"],
+	order_by="creation desc",
+	limit=10,
 )
 ```

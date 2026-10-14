@@ -11,4 +11,5 @@ class DAFarmerReference(Document):
 	Written by the farmer sync service, never by users.
 	Enables fast profile screens without calling the registry per row.
 	"""
+
 	pass

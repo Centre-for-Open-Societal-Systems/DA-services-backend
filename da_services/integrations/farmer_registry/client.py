@@ -12,87 +12,87 @@ from .schemas import Farmer, FarmerListItem, Plot
 
 
 class FarmerRegistryClient(ABC):
-    """Abstract interface to the Farmer Registry."""
+	"""Abstract interface to the Farmer Registry."""
 
-    @abstractmethod
-    def get_farmer(self, farmer_id: str) -> Farmer | None:
-        """Get a single farmer by ID.
+	@abstractmethod
+	def get_farmer(self, farmer_id: str) -> Farmer | None:
+		"""Get a single farmer by ID.
 
-        Args:
-            farmer_id: Farmer Registry internal_record_id
+		Args:
+		    farmer_id: Farmer Registry internal_record_id
 
-        Returns:
-            Farmer object or None if not found
-        """
-        pass
+		Returns:
+		    Farmer object or None if not found
+		"""
+		pass
 
-    @abstractmethod
-    def list_farmers(
-        self,
-        *,
-        woreda: str | None = None,
-        kebele: str | None = None,
-        state: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> tuple[list[FarmerListItem], int]:
-        """List farmers with filters.
+	@abstractmethod
+	def list_farmers(
+		self,
+		*,
+		woreda: str | None = None,
+		kebele: str | None = None,
+		state: str | None = None,
+		limit: int = 50,
+		offset: int = 0,
+	) -> tuple[list[FarmerListItem], int]:
+		"""List farmers with filters.
 
-        Args:
-            woreda: Filter by woreda code
-            kebele: Filter by kebele code
-            state: Filter by farmer state (APPROVED, etc.)
-            limit: Page size
-            offset: Page offset
+		Args:
+		    woreda: Filter by woreda code
+		    kebele: Filter by kebele code
+		    state: Filter by farmer state (APPROVED, etc.)
+		    limit: Page size
+		    offset: Page offset
 
-        Returns:
-            (list of farmers, total count)
-        """
-        pass
+		Returns:
+		    (list of farmers, total count)
+		"""
+		pass
 
-    @abstractmethod
-    def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
-        """Get land plots for a farmer.
+	@abstractmethod
+	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
+		"""Get land plots for a farmer.
 
-        Args:
-            farmer_id: Farmer Registry internal_record_id
+		Args:
+		    farmer_id: Farmer Registry internal_record_id
 
-        Returns:
-            List of Plot objects
-        """
-        pass
+		Returns:
+		    List of Plot objects
+		"""
+		pass
 
-    @abstractmethod
-    def update_farmer(self, farmer_id: str, updates: dict) -> dict:
-        """Update farmer data (for DA-41).
+	@abstractmethod
+	def update_farmer(self, farmer_id: str, updates: dict) -> dict:
+		"""Update farmer data (for DA-41).
 
-        Args:
-            farmer_id: Farmer Registry internal_record_id
-            updates: Fields to update
+		Args:
+		    farmer_id: Farmer Registry internal_record_id
+		    updates: Fields to update
 
-        Returns:
-            Update result with version info
-        """
-        pass
+		Returns:
+		    Update result with version info
+		"""
+		pass
 
 
 def get_farmer_registry_client() -> FarmerRegistryClient:
-    """Factory: returns the configured Farmer Registry client.
+	"""Factory: returns the configured Farmer Registry client.
 
-    Selection order:
-    1. Site config `farmer_registry_backend` ("mock" or "http")
-    2. Default: "mock"
+	Selection order:
+	1. Site config `farmer_registry_backend` ("mock" or "http")
+	2. Default: "mock"
 
-    The mock backend is safe for development and testing without a live
-    Farmer Registry. Switch to "http" once the registry is deployed.
-    """
-    backend = frappe.conf.get("farmer_registry_backend", "mock")
+	The mock backend is safe for development and testing without a live
+	Farmer Registry. Switch to "http" once the registry is deployed.
+	"""
+	backend = frappe.conf.get("farmer_registry_backend", "mock")
 
-    if backend == "http":
-        from .http import HTTPFarmerRegistryClient
+	if backend == "http":
+		from .http import HTTPFarmerRegistryClient
 
-        return HTTPFarmerRegistryClient()
-    else:
-        from .mock import MockFarmerRegistryClient
+		return HTTPFarmerRegistryClient()
+	else:
+		from .mock import MockFarmerRegistryClient
 
-        return MockFarmerRegistryClient()
+		return MockFarmerRegistryClient()

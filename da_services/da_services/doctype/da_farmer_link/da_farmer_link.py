@@ -28,7 +28,7 @@ class DAFarmerLink(Document):
 				"DA Farmer Reference",
 				self.farmer_id,
 				["farmer_name", "region", "woreda", "kebele"],
-				as_dict=True
+				as_dict=True,
 			)
 			if ref:
 				self.farmer_name = ref.farmer_name
