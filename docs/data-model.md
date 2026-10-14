@@ -220,15 +220,19 @@ the Farmer Registry.
 |---|---|---|
 | `da_id` | Data, indexed | |
 | `farmer_id` | Data, indexed | Farmer Registry id |
-| `kebele` | Data | |
-| `mode` | Select: Automatic / Manual | FSD 3.5 |
-| `relationship_state` | Select: Active / Ended / Pending sync | |
-| `linked_at`, `ended_at` | Datetime | |
-| `set_by` | Link User | Supervisor for manual |
-| `end_reason` | Small Text | |
-| `client_op_id`, `sync_state` | | |
+| `farmer_name`, `kebele`, `region`, `woreda` | Data, indexed | Cached from Farmer Registry |
+| `link_type` | Select: Automatic / Manual | FSD 3.5 (renamed from `mode`) |
+| `is_active` | Check | 1 = Active, 0 = Ended (simplified from `relationship_state`) |
+| `linked_at` | Datetime | |
+| `linked_by` | Link User | Supervisor for manual (renamed from `set_by`) |
+| `notes` | Small Text | General notes (replaces `end_reason`) |
 
-Unique: (`da_id`, `farmer_id`) where `relationship_state = Active`.
+Unique: (`da_id`, `farmer_id`) where `is_active = 1`.
+
+**Implementation note:** The initial implementation (DA-40) uses `link_type` + `is_active` + `linked_by`
+instead of `mode` + `relationship_state` + `set_by` + `ended_at` + `end_reason`. This simplified
+model handles the current use case (Active vs Ended links). If more states are needed later
+(Pending sync, Suspended, etc.), we can extend `is_active` to a Select field or add state tracking.
 
 ### 5.2 DA Farmer Reference (projection)
 

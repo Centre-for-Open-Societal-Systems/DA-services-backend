@@ -14,9 +14,19 @@ Default configuration - uses hardcoded test data, no network calls.
 }
 ```
 
-### HTTP Backend (Production)
+### HTTP Backend (Placeholder - Not Production-Ready)
 
-Connect to real Farmer Registry service with configurable routes.
+**Note:** This HTTP client is a placeholder. The actual Farmer Registry data comes from the
+**Aggregation Layer** API which uses a different contract:
+- `POST /aggregation/v1/staff/registry/search` (by foundationalId)
+- `POST /aggregation/v1/staff/registry/tab` (with searchId + tabId)
+- Keycloak token authentication (realm: staff)
+- No list endpoint available yet (as of Oct 2026)
+
+This HTTP client will be updated once the Aggregation Layer contract is finalized.
+See `docs/DA-Data-Requirements.pdf` for the complete integration specification.
+
+Connect to a compatible Farmer Registry service with configurable routes.
 
 **File:** `sites/da-services.localhost/site_config.json`
 

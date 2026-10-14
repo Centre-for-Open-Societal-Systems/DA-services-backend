@@ -40,24 +40,31 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 	if not ref:
 		frappe.throw(_("Farmer {0} not found.").format(farmer_id), frappe.DoesNotExistError)
 
-	# Check scope: Farmer must be in user's region/woreda/zone
+	# Check scope: Different rules for DA vs Supervisor/Executive
 	if not ctx.unrestricted:
-		farmer_region = ref.get("region")
-		farmer_woreda = ref.get("woreda")
-		farmer_zone = ref.get("zone")
+		if ctx.has_any_role(C.ROLE_DA):
+			# DAs can ONLY access linked farmers
+			da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
+			if not _is_farmer_linked_to_da(farmer_id, da_ids_list):
+				frappe.throw(_("Farmer is not linked or assigned to you."), frappe.PermissionError)
+		else:
+			# Supervisors/Executives check region/woreda scope
+			farmer_region = ref.get("region")
+			farmer_woreda = ref.get("woreda")
+			farmer_zone = ref.get("zone")
 
-		covered, reason = ctx.scope_decision(region=farmer_region, woreda=farmer_woreda, zone=farmer_zone)
+			covered, reason = ctx.scope_decision(region=farmer_region, woreda=farmer_woreda, zone=farmer_zone)
 
-		if not covered:
-			from da_services.utils.permissions import SCOPE_UNRESOLVED
+			if not covered:
+				from da_services.utils.permissions import SCOPE_UNRESOLVED
 
-			if reason == SCOPE_UNRESOLVED:
-				frappe.throw(
-					_("Cannot verify farmer scope: missing Woreda or Zone data."),
-					frappe.PermissionError,
-				)
-			else:
-				frappe.throw(_("Farmer is not in your scope."), frappe.PermissionError)
+				if reason == SCOPE_UNRESOLVED:
+					frappe.throw(
+						_("Cannot verify farmer scope: missing Woreda or Zone data."),
+						frappe.PermissionError,
+					)
+				else:
+					frappe.throw(_("Farmer is not in your scope."), frappe.PermissionError)
 
 	# Get visit data (last visit, pending tasks)
 	visit_data = _get_farmer_visit_data(farmer_id)
@@ -106,24 +113,20 @@ def list_farmers(
 	"""
 	filters = {}
 
-	# Scope filters
-	if not ctx.unrestricted:
-		if ctx.has_any_role(C.ROLE_DA):
-			# DA sees only linked farmers
-			da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-			linked_farmer_ids = _get_linked_farmer_ids(da_ids_list)
-			if not linked_farmer_ids:
-				return [], 0
-			filters["farmer_id"] = ("in", linked_farmer_ids)
-		else:
-			# For Supervisor/Executive, filter by their scope
-			woreda_scope = next(iter(ctx.woreda_scopes), None) if ctx.woreda_scopes else None
-			region_scope = next(iter(ctx.region_scopes), None) if ctx.region_scopes else None
-
-			if woreda_scope:
-				filters["woreda"] = woreda_scope
-			elif region_scope:
-				filters["region"] = region_scope
+	# Scope filters - handled by permission_query_conditions hook
+	# The hook in permissions.py applies scope automatically, so we don't
+	# need to manually filter here. This ensures:
+	# - DAs see only linked farmers
+	# - Supervisors with multiple Woredas see all of them
+	# - Zone-scoped Supervisors are denied (no zone field on DA Farmer Reference)
+	# We only need to handle the DA case for the additional linked farmers logic
+	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
+		# DA sees only linked farmers - apply this before the query
+		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
+		linked_farmer_ids = _get_linked_farmer_ids(da_ids_list)
+		if not linked_farmer_ids:
+			return [], 0
+		filters["farmer_id"] = ("in", linked_farmer_ids)
 
 	# User filters - must not override scope
 	# Woreda filter can only narrow within the scope, not expand it
@@ -132,17 +135,36 @@ def list_farmers(
 			# Validate that requested woreda is within scope
 			if ctx.has_any_role(C.ROLE_DA):
 				# DA scope is linked farmers, woreda filter is additional narrowing
-				pass  # Already filtered by linked farmers above
-			elif ctx.woreda_scopes and woreda not in ctx.woreda_scopes:
-				# Supervisor trying to query outside their Woreda
-				frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
-			elif ctx.region_scopes and filters.get("region") != woreda[:4]:
-				# Executive trying to query Woreda outside their Region
-				# Assuming Woreda codes start with Region code (e.g., ET04-W01)
-				# This may need adjustment based on actual code structure
-				pass
-			# Apply the filter only if it's within scope
-			filters["woreda"] = woreda
+				filters["woreda"] = woreda
+			elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+				# Check if the woreda is in the user's scope
+				if ctx.woreda_scopes:
+					# Woreda-scoped: must be in their woredas
+					if woreda not in ctx.woreda_scopes:
+						frappe.throw(
+							_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError
+						)
+					filters["woreda"] = woreda
+				elif ctx.zone_scopes:
+					# Zone-scoped: would need to validate woreda is in their zone
+					# For now, deny (zone validation not implemented)
+					frappe.throw(_("Cannot filter by Woreda with Zone-only scope."), frappe.PermissionError)
+				elif ctx.region_scopes:
+					# Region-scoped: woreda must be in their region
+					# Simplified check: assume woreda code starts with region code
+					woreda_region = woreda.split("-")[0] if "-" in woreda else None
+					if woreda_region and woreda_region not in ctx.region_scopes:
+						frappe.throw(
+							_("Woreda {0} is not in your Region scope.").format(woreda),
+							frappe.PermissionError,
+						)
+					filters["woreda"] = woreda
+				else:
+					# No scope defined, deny
+					frappe.throw(_("You do not have scope to filter by Woreda."), frappe.PermissionError)
+			else:
+				# Other roles: apply filter directly
+				filters["woreda"] = woreda
 		else:
 			filters["woreda"] = woreda
 
@@ -172,8 +194,10 @@ def list_farmers(
 		else:
 			return [], 0
 
-	# Query DA Farmer Reference
-	farmers = frappe.get_all(
+	# Query DA Farmer Reference using get_list to apply permission hooks
+	# This ensures zone-scoped Supervisors are denied and multi-Woreda
+	# Supervisors see all their Woredas
+	farmers = frappe.get_list(
 		"DA Farmer Reference",
 		filters=filters,
 		fields=[
@@ -189,11 +213,14 @@ def list_farmers(
 			"registered_at",
 		],
 		order_by="farmer_name asc",
-		limit=limit,
-		start=start,
+		limit_page_length=limit,
+		limit_start=start,
 	)
 
-	total = frappe.db.count("DA Farmer Reference", filters)
+	# Count with the same filters using get_list to apply permission hooks
+	# frappe.db.count() bypasses permission hooks, so we use get_list with pluck
+	total_ids = frappe.get_list("DA Farmer Reference", filters=filters, pluck="name")
+	total = len(total_ids)
 
 	# Enrich with visit counts
 	for farmer in farmers:
