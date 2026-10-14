@@ -18,7 +18,7 @@ Configuration Example:
     }
 """
 
-from typing import List, Optional
+from typing import ClassVar
 
 import frappe
 import requests
@@ -32,7 +32,7 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
     """HTTP client for live Farmer Registry with configurable routes."""
 
     # Default endpoint templates (can be overridden in config)
-    DEFAULT_ENDPOINTS = {
+    DEFAULT_ENDPOINTS: ClassVar[dict] = {
         "get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
         "list_farmers": "/api/{version}/registry/farmer",
         "get_plots": "/api/{version}/registry/land",

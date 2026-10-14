@@ -4,8 +4,6 @@ Business logic for farmer profile display, combining Farmer Registry data
 with DA Visit history and permission checks.
 """
 
-from typing import Optional, Tuple
-
 import frappe
 from frappe import _
 

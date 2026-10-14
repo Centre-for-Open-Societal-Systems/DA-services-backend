@@ -5,7 +5,6 @@ without a live Farmer Registry instance.
 """
 
 from datetime import date, datetime
-from typing import List, Optional
 
 from .client import FarmerRegistryClient
 from .schemas import Farmer, FarmerListItem, Plot

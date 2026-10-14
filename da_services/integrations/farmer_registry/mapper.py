@@ -3,7 +3,7 @@
 Handles naming and format differences between systems.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from .schemas import Farmer
 
