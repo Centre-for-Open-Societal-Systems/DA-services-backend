@@ -46,9 +46,7 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 		farmer_woreda = ref.get("woreda")
 		farmer_zone = ref.get("zone")
 
-		covered, reason = ctx.scope_decision(
-			region=farmer_region, woreda=farmer_woreda, zone=farmer_zone
-		)
+		covered, reason = ctx.scope_decision(region=farmer_region, woreda=farmer_woreda, zone=farmer_zone)
 
 		if not covered:
 			from da_services.utils.permissions import SCOPE_UNRESOLVED
@@ -137,9 +135,7 @@ def list_farmers(
 				pass  # Already filtered by linked farmers above
 			elif ctx.woreda_scopes and woreda not in ctx.woreda_scopes:
 				# Supervisor trying to query outside their Woreda
-				frappe.throw(
-					_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError
-				)
+				frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
 			elif ctx.region_scopes and filters.get("region") != woreda[:4]:
 				# Executive trying to query Woreda outside their Region
 				# Assuming Woreda codes start with Region code (e.g., ET04-W01)
