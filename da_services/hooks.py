@@ -146,6 +146,7 @@ permission_query_conditions = {
 	"DA Task": "da_services.permissions.da_task_query_conditions",
 	"DA Visit": "da_services.permissions.da_visit_query_conditions",
 	"DA Notification": "da_services.permissions.da_notification_query_conditions",
+	"DA Kebele Assignment": "da_services.permissions.da_kebele_assignment_query_conditions",
 }
 
 has_permission = {
@@ -153,6 +154,7 @@ has_permission = {
 	"DA Task": "da_services.permissions.has_da_task_permission",
 	"DA Visit": "da_services.permissions.has_da_visit_permission",
 	"DA Notification": "da_services.permissions.has_da_notification_permission",
+	"DA Kebele Assignment": "da_services.permissions.has_da_kebele_assignment_permission",
 }
 
 # Document Events

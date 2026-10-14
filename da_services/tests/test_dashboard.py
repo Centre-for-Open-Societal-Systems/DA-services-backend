@@ -153,7 +153,7 @@ class TestDashboard(IntegrationTestCase):
 		self.assertEqual(first, second)
 		self.assertEqual(first["visits"], 6)
 		self.assertEqual(first["tasks"], 7)
-		self.assertEqual(first["notifications"], 2)
+		self.assertEqual(first["notifications"], 3)  # sync, broadcast, assignment
 		out = dashboard.summary(_ctx("da.demo@da.local"))
 		self.assertEqual(out["visits"], {"planned": 6, "completed": 4})  # the tile's "4 of 6 planned"
 		self.assertEqual(out["tasks"], {"open": 4, "done": 3, "urgent": 1, "due_today": 2})
