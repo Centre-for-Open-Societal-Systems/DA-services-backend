@@ -222,11 +222,13 @@ class TestFarmerUpdates(FrappeTestCase):
 		event = frappe.get_doc("DA Integration Event", event_id)
 		self.assertEqual(event.event_type, "Farmer Update")
 		self.assertEqual(event.status, "Pending")
-		self.assertEqual(event.reference_id, "farmer-uuid-001")
+		# reference_id now stores client_op_id for idempotency (Blocker #2 fix)
+		self.assertTrue(event.reference_id)  # Should have a generated op_id
+		self.assertNotEqual(event.reference_id, "farmer-uuid-001")  # Not the farmer_id
 
 		# Verify payload
 		payload = json.loads(event.payload)
-		self.assertEqual(payload["farmer_id"], "farmer-uuid-001")
+		self.assertEqual(payload["farmer_id"], "farmer-uuid-001")  # farmer_id in payload
 		self.assertEqual(payload["updates"]["phone"], "912345678")
 		self.assertEqual(payload["updates"]["email"], "newemail@example.com")
 
@@ -257,10 +259,11 @@ class TestFarmerUpdates(FrappeTestCase):
 		# Should return same event (idempotent)
 		self.assertEqual(event_id1, event_id2)
 
-		# Should only have one event
+		# Should only have one event for this client_op_id
+		# reference_id now stores client_op_id, not farmer_id (Blocker #2 fix)
 		events = frappe.get_all(
 			"DA Integration Event",
-			filters={"event_type": "Farmer Update", "reference_id": "farmer-uuid-001"},
+			filters={"event_type": "Farmer Update", "reference_id": client_op_id},
 		)
 		self.assertEqual(len(events), 1)
 

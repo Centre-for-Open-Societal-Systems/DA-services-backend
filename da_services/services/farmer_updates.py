@@ -123,32 +123,35 @@ def queue_farmer_update(
 	# Validate field values
 	_validate_field_values(updates)
 
+	# Store client_op_id for deduplication (FR-08 idempotency)
+	# reference_id = client_op_id (queryable), farmer_id stays in payload
+	op_id = client_op_id or frappe.generate_hash(length=16)
+
 	# Build payload
 	payload = {
-		"farmer_id": farmer_id,
+		"farmer_id": farmer_id,  # Farmer ID stays in payload
 		"updates": updates,
 		"expected_version": getattr(farmer, "version", 1),
 		"da_id": da_ids[0] if da_ids else None,
 		"updated_by": frappe.session.user,
-		"client_op_id": client_op_id or frappe.generate_hash(length=16),
+		"client_op_id": op_id,  # For reference in error messages
 	}
 
 	# Check for existing event with same client_op_id (idempotency)
-	if client_op_id:
-		existing = frappe.db.get_value(
-			"DA Integration Event",
-			{
-				"event_type": "Farmer Update",
-				"reference_id": farmer_id,
-				"status": ("in", ["Pending", "Processing", "Completed"]),
-			},
-			["name", "status", "external_reference"],
-			as_dict=True,
-		)
-		if existing:
-			# Already queued/completed, return existing
-			frappe.msgprint(_("Update already queued or completed."))
-			return existing.name
+	existing = frappe.db.get_value(
+		"DA Integration Event",
+		{
+			"event_type": "Farmer Update",
+			"reference_id": op_id,  # Match on client_op_id, not farmer_id
+			"status": ("in", ["Pending", "Processing", "Completed"]),
+		},
+		["name", "status", "external_reference"],
+		as_dict=True,
+	)
+	if existing:
+		# Already queued/completed, return existing
+		frappe.msgprint(_("Update already queued or completed."))
+		return existing.name
 
 	# Create integration event (persistent queue)
 	event = frappe.get_doc(
@@ -156,7 +159,7 @@ def queue_farmer_update(
 			"doctype": "DA Integration Event",
 			"event_type": "Farmer Update",
 			"status": "Pending",
-			"reference_id": farmer_id,
+			"reference_id": op_id,  # Store client_op_id for idempotency
 			"payload": json.dumps(payload, default=str),
 			"attempts": 0,
 			"max_attempts": MAX_RETRY_ATTEMPTS,

@@ -13,7 +13,6 @@ from oan_auth_service.api.router import (
 	_exempt_paths,
 	_rules,
 	prefixed,
-	rest,
 )
 from oan_auth_service.api.router import (
 	ensure_routes_registered as ensure_auth_routes,
@@ -68,7 +67,17 @@ def _register() -> None:
 	ensure_auth_routes()
 
 	# Importing the endpoint modules executes their @route(...) registrations.
-	from da_services.api.v1 import assignments, da, dashboard, farmers, me, notifications, rbac, visits
+	from da_services.api.v1 import (
+		assignments,
+		da,
+		dashboard,
+		farmers,
+		farmers_update,
+		me,
+		notifications,
+		rbac,
+		visits,
+	)
 
 	for rule in _rules:
 		if rule not in frappe.api.API_URL_MAP._rules:

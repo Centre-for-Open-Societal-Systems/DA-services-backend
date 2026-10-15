@@ -120,15 +120,24 @@ def update_farmer_profile(farmer_id: str):
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	# Get update fields from request body
-	request_data = frappe.request.get_json() if frappe.request else frappe.form_dict
+	# Use silent=True to return None on malformed JSON instead of raising 500
+	request_data = frappe.request.get_json(silent=True) if frappe.request else None
+
+	# Fallback to form_dict for test framework, but filter out framework fields
+	if not request_data and frappe.form_dict:
+		# Filter out Frappe framework fields (cmd, etc.)
+		framework_keys = {"cmd", "_", "sid"}
+		request_data = {k: v for k, v in frappe.form_dict.items() if k not in framework_keys}
+
 	if not request_data:
-		frappe.throw(_("Request body is required."), frappe.ValidationError)
+		frappe.throw(_("Request body is required and must be valid JSON."), frappe.ValidationError)
 
 	# Extract client_op_id if provided (for idempotency)
-	client_op_id = request_data.pop("client_op_id", None)
+	client_op_id = request_data.get("client_op_id")
 
-	# Remaining fields are the updates
-	updates = request_data
+	# Extract only known update fields (ignore framework fields like cmd)
+	# All other fields in request_data are treated as farmer field updates
+	updates = {k: v for k, v in request_data.items() if k != "client_op_id"}
 
 	if not updates:
 		frappe.throw(_("No fields to update."), frappe.ValidationError)
@@ -184,10 +193,21 @@ def get_farmer_update_status(farmer_id: str):
 	        }
 	    }
 	"""
-	require_roles(*WRITE_ROLES)
+	ctx = require_roles(*WRITE_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
+
+	# Scope check: Ensure farmer is linked to the current DA
+	# (same check as in update_farmer_profile)
+	from da_services.services.farmers import get_farmer_profile
+
+	try:
+		get_farmer_profile(farmer_id, ctx)  # Will throw if not in scope
+	except frappe.DoesNotExistError:
+		frappe.throw(_("Farmer {0} not found.").format(farmer_id), frappe.DoesNotExistError)
+	except frappe.PermissionError:
+		frappe.throw(_("Farmer is not linked or assigned to you."), frappe.PermissionError)
 
 	# Get pending updates for this farmer
 	pending = farmer_updates.get_pending_updates(farmer_id)
@@ -229,6 +249,16 @@ def retry_farmer_update(event_id: str):
 
 	if not event_id:
 		frappe.throw(_("Event ID is required."), frappe.ValidationError)
+
+	# Verify this is a Farmer Update event (not a grievance event)
+	event_type = frappe.db.get_value("DA Integration Event", event_id, "event_type")
+	if not event_type:
+		frappe.throw(_("Event {0} not found.").format(event_id), frappe.DoesNotExistError)
+	if event_type != "Farmer Update":
+		frappe.throw(
+			_("Event {0} is type '{1}', not 'Farmer Update'.").format(event_id, event_type),
+			frappe.ValidationError,
+		)
 
 	# Trigger retry
 	result = farmer_updates.retry_failed_update(event_id)
