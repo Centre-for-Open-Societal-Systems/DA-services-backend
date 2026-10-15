@@ -111,7 +111,11 @@ def _handle_failure(doc, exc: Exception, retryable: bool = True) -> None:
 
 
 def process_pending() -> None:
-	"""Scheduler entry point: sweep retryable rows and recover stale Processing rows."""
+	"""Scheduler entry point: sweep retryable rows and recover stale Processing rows.
+
+	Only processes grievance events - other event types (e.g., Farmer Update) have
+	their own processors.
+	"""
 	now = now_datetime()
 
 	_recover_stale_processing(now)
@@ -121,6 +125,7 @@ def process_pending() -> None:
 		filters={
 			"status": "Pending",
 			"next_retry_at": ("<=", now),
+			"event_type": ["in", ["Grievance Submit", "Grievance Action"]],
 		},
 		fields=["name"],
 		order_by="next_retry_at asc",
@@ -141,6 +146,8 @@ def _recover_stale_processing(now) -> None:
 
 	This handles the case where the server crashed mid-processing — the row would
 	otherwise be orphaned forever since the scheduler only sweeps Pending rows.
+
+	Only recovers grievance events - leaves Conflict status and other event types alone.
 	"""
 	cutoff = now - timedelta(minutes=STALE_PROCESSING_MINUTES)
 	stale = frappe.get_all(
@@ -148,6 +155,7 @@ def _recover_stale_processing(now) -> None:
 		filters={
 			"status": "Processing",
 			"modified": ("<=", cutoff),
+			"event_type": ["in", ["Grievance Submit", "Grievance Action"]],
 		},
 		fields=["name"],
 	)

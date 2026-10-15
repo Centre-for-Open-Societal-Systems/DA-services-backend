@@ -180,6 +180,7 @@ scheduler_events = {
 	"cron": {
 		"*/5 * * * *": [
 			"da_services.integrations.grievance.queue.process_pending",
+			"da_services.services.farmer_updates.process_pending_farmer_updates",
 		],
 	},
 }

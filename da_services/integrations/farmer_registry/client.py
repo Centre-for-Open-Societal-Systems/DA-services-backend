@@ -11,6 +11,12 @@ import frappe
 from .schemas import Farmer, FarmerListItem, Plot
 
 
+class FarmerRegistryError(Exception):
+	"""Base exception for Farmer Registry integration errors."""
+
+	pass
+
+
 class FarmerRegistryClient(ABC):
 	"""Abstract interface to the Farmer Registry."""
 
@@ -63,15 +69,27 @@ class FarmerRegistryClient(ABC):
 		pass
 
 	@abstractmethod
-	def update_farmer(self, farmer_id: str, updates: dict) -> dict:
+	def update_farmer(self, farmer_id: str, updates: dict, expected_version: int | None = None) -> dict:
 		"""Update farmer data (for DA-41).
 
 		Args:
 		    farmer_id: Farmer Registry internal_record_id
-		    updates: Fields to update
+		    updates: Dict of field:value pairs to update
+		    expected_version: Expected current version (for optimistic concurrency)
 
 		Returns:
-		    Update result with version info
+		    Update result dict:
+		        {
+		            "success": bool,
+		            "farmer_id": str,
+		            "version": int,  # New version after update
+		            "conflict": bool,  # True if version mismatch
+		            "current_version": int,  # Server version (if conflict)
+		            "current_data": dict,  # Server data (if conflict)
+		        }
+
+		Raises:
+		    FarmerRegistryError: Registry unavailable or error
 		"""
 		pass
 
