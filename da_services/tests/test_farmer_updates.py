@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
 from da_services.services import constants as C
 
@@ -59,7 +59,7 @@ DA2 = "da2@da.local"
 SUP = "sup@da.local"
 
 
-class TestFarmerUpdates(FrappeTestCase):
+class TestFarmerUpdates(IntegrationTestCase):
 	"""Test cases for DA-41 farmer profile updates."""
 
 	@classmethod
@@ -266,6 +266,53 @@ class TestFarmerUpdates(FrappeTestCase):
 			filters={"event_type": "Farmer Update", "reference_id": client_op_id},
 		)
 		self.assertEqual(len(events), 1)
+
+	def test_different_client_op_ids_both_queued(self):
+		"""Test two different updates with different client_op_ids both succeed.
+
+		Addresses PR review blocker #2: Ensures idempotency is based on client_op_id,
+		not farmer_id, so multiple distinct updates to the same farmer are all queued.
+		"""
+		frappe.set_user(DA1)
+
+		from da_services.api.v1.farmers_update import update_farmer_profile
+
+		# First update with client_op_id_1
+		frappe.form_dict = {
+			"phone": "912345678",
+			"client_op_id": "update-1-phone",
+		}
+		result1 = update_farmer_profile("farmer-uuid-001")
+		event_id1 = result1["data"]["event_id"]
+
+		# Second update with different client_op_id (different field)
+		frappe.form_dict = {
+			"email": "newemail@example.com",
+			"client_op_id": "update-2-email",
+		}
+		result2 = update_farmer_profile("farmer-uuid-001")
+		event_id2 = result2["data"]["event_id"]
+
+		# Should create two separate events (not deduplicated)
+		self.assertNotEqual(event_id1, event_id2)
+
+		# Verify both events exist and are distinct
+		event1 = frappe.get_doc("DA Integration Event", event_id1)
+		event2 = frappe.get_doc("DA Integration Event", event_id2)
+
+		self.assertEqual(event1.reference_id, "update-1-phone")
+		self.assertEqual(event2.reference_id, "update-2-email")
+
+		# Verify payloads are different
+		payload1 = json.loads(event1.payload)
+		payload2 = json.loads(event2.payload)
+
+		self.assertIn("phone", payload1["updates"])
+		self.assertIn("email", payload2["updates"])
+
+		# Both should be for the same farmer
+		self.assertEqual(payload1["farmer_id"], "farmer-uuid-001")
+		self.assertEqual(payload2["farmer_id"], "farmer-uuid-001")
 
 	def test_update_multiple_fields(self):
 		"""Test updating multiple fields at once."""
@@ -513,6 +560,210 @@ class TestFarmerUpdates(FrappeTestCase):
 		# Should be marked as Conflict
 		self.assertEqual(event.status, "Conflict")
 		self.assertIn("version", event.last_error.lower())
+
+	def test_retry_sweep_with_backoff_and_max_attempts(self):
+		"""Test scheduler sweep processes pending updates with retry and eventual failure.
+
+		Addresses PR review blocker A: Tests that process_pending_farmer_updates()
+		correctly sweeps pending events, increments attempts, applies backoff, and
+		marks events as Failed after MAX_RETRY_ATTEMPTS.
+
+		Flow:
+		1. Create Pending event with next_retry_at in the past
+		2. Mock Farmer Registry client to always fail
+		3. Call process_pending_farmer_updates() repeatedly
+		4. Verify: attempts increment, next_retry_at updates with backoff, status becomes Failed
+		"""
+		frappe.set_user("Administrator")
+
+		from datetime import datetime
+		from unittest.mock import patch
+
+		from da_services.services.farmer_updates import (
+			MAX_RETRY_ATTEMPTS,
+			process_pending_farmer_updates,
+		)
+
+		# Create event ready for retry (next_retry_at in the past)
+		past_time = datetime(2026, 10, 14, 10, 0, 0)
+		event = frappe.get_doc(
+			{
+				"doctype": "DA Integration Event",
+				"event_type": "Farmer Update",
+				"status": "Pending",
+				"reference_id": "test-retry-sweep-001",
+				"payload": json.dumps(
+					{
+						"farmer_id": "farmer-uuid-001",
+						"updates": {"phone": "999999999"},
+						"expected_version": 1,
+						"da_id": "DA-000001",
+					}
+				),
+				"attempts": 0,
+				"max_attempts": MAX_RETRY_ATTEMPTS,
+				"next_retry_at": past_time,  # Ready for immediate retry
+			}
+		)
+		event.insert(ignore_permissions=True)
+		frappe.db.commit()
+
+		# Mock Farmer Registry client to always fail (transient error)
+		from da_services.integrations.farmer_registry.client import FarmerRegistryError
+
+		# Patch where the function is used, not where it's defined
+		with patch("da_services.services.farmer_updates.get_farmer_registry_client") as mock_get_client:
+			mock_client = mock_get_client.return_value
+			mock_client.update_farmer.side_effect = FarmerRegistryError("Connection timeout")
+
+			# Sweep 1: Should process and schedule retry
+			process_pending_farmer_updates()
+			event.reload()
+
+			self.assertEqual(event.status, "Pending")  # Still retryable
+			self.assertEqual(event.attempts, 1)
+			self.assertIsNotNone(event.next_retry_at)
+			self.assertIn("Connection timeout", event.last_error)
+
+			# Sweep 2-4: Continue retrying
+			for expected_attempt in range(2, MAX_RETRY_ATTEMPTS):
+				# Set next_retry_at to past to trigger sweep
+				event.db_set("next_retry_at", past_time, update_modified=False)
+				frappe.db.commit()
+
+				process_pending_farmer_updates()
+				event.reload()
+
+				self.assertEqual(event.status, "Pending")
+				self.assertEqual(event.attempts, expected_attempt)
+
+			# Final sweep: Should reach MAX_RETRY_ATTEMPTS and mark as Failed
+			event.db_set("next_retry_at", past_time, update_modified=False)
+			frappe.db.commit()
+
+			process_pending_farmer_updates()
+			event.reload()
+
+			self.assertEqual(event.status, "Failed")
+			self.assertEqual(event.attempts, MAX_RETRY_ATTEMPTS)
+			self.assertIn("Max retries", event.last_error)
+
+	def test_sweep_recovers_stale_processing_events(self):
+		"""Test scheduler recovers events stuck in Processing state.
+
+		Addresses PR review blocker A: Tests that _recover_stale_processing_farmer_updates()
+		resets events that have been stuck in Processing for >10 minutes (e.g., server crash).
+		"""
+		frappe.set_user("Administrator")
+
+		from datetime import datetime, timedelta
+		from unittest.mock import patch
+
+		from da_services.integrations.farmer_registry.client import FarmerRegistryError
+		from da_services.services.farmer_updates import process_pending_farmer_updates
+
+		# Create event stuck in Processing (modified 15 minutes ago)
+		stale_time = datetime.now() - timedelta(minutes=15)
+		event = frappe.get_doc(
+			{
+				"doctype": "DA Integration Event",
+				"event_type": "Farmer Update",
+				"status": "Processing",
+				"reference_id": "test-stale-001",
+				"payload": json.dumps(
+					{
+						"farmer_id": "farmer-uuid-001",
+						"updates": {"phone": "999999999"},
+					}
+				),
+				"attempts": 2,
+				"max_attempts": 5,
+			}
+		)
+		event.insert(ignore_permissions=True)
+		frappe.db.commit()
+
+		# Manually set modified time to the past (simulate stuck event)
+		frappe.db.sql(
+			"""
+			UPDATE `tabDA Integration Event`
+			SET modified = %s
+			WHERE name = %s
+			""",
+			(stale_time, event.name),
+		)
+		frappe.db.commit()
+
+		# Mock client to fail so event stays Pending after recovery
+		with patch("da_services.services.farmer_updates.get_farmer_registry_client") as mock_get_client:
+			mock_client = mock_get_client.return_value
+			mock_client.update_farmer.side_effect = FarmerRegistryError("Connection timeout")
+
+			# Run sweep
+			process_pending_farmer_updates()
+
+			# Reload event
+			event.reload()
+
+			# Should be reset to Pending with updated next_retry_at
+			self.assertEqual(event.status, "Pending")
+			self.assertIsNotNone(event.next_retry_at)
+
+	def test_sweep_ignores_conflict_events(self):
+		"""Test scheduler does not recover events in Conflict status.
+
+		Conflict events require manual resolution, not automatic retry.
+		"""
+		frappe.set_user("Administrator")
+
+		from datetime import datetime, timedelta
+
+		from da_services.services.farmer_updates import process_pending_farmer_updates
+
+		# Create event with Failed status first, then change to Conflict
+		# (avoids doctype validation issues during test setup)
+		stale_time = datetime.now() - timedelta(minutes=15)
+		event = frappe.get_doc(
+			{
+				"doctype": "DA Integration Event",
+				"event_type": "Farmer Update",
+				"status": "Failed",  # Create as Failed first
+				"reference_id": "test-conflict-001",
+				"payload": json.dumps(
+					{
+						"farmer_id": "farmer-uuid-001",
+						"updates": {"phone": "999999999"},
+					}
+				),
+				"attempts": 1,
+				"max_attempts": 5,
+			}
+		)
+		event.insert(ignore_permissions=True)
+
+		# Now set to Conflict using db_set (bypasses validation)
+		event.db_set("status", "Conflict", update_modified=False)
+		frappe.db.commit()
+
+		# Manually set modified time to the past
+		frappe.db.sql(
+			"""
+			UPDATE `tabDA Integration Event`
+			SET modified = %s
+			WHERE name = %s
+			""",
+			(stale_time, event.name),
+		)
+		frappe.db.commit()
+
+		# Run sweep
+		process_pending_farmer_updates()
+
+		# Reload event
+		event.reload()
+
+		# Should remain in Conflict status (not recovered)
+		self.assertEqual(event.status, "Conflict")
 
 	# ========================================================================
 	# STATUS CHECK

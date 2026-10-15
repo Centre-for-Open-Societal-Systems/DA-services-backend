@@ -2,11 +2,14 @@
 
 PATCH /api/v1/da-services/farmers/{id}
 
-Implements offline-first farmer profile updates with:
+Implements queued farmer profile updates (server-side outbox pattern):
 - Permission validation (linked farmers only)
 - Field validation (approved fields only)
-- Offline queue with retry
-- Version conflict detection
+- Server-side queue with retry (not client-side offline storage)
+- Version conflict detection (mock-only, real API pending)
+
+Note: Product decision pending - this implements direct PATCH, but UI contract
+(docs/api-da-screens.md §2.3) expects change request workflow. See DA-41 issue #9.
 """
 
 from __future__ import annotations

@@ -1,11 +1,14 @@
 """Farmer profile update service (DA-41).
 
-Implements offline-first farmer profile updates with:
+Implements queued farmer profile updates with retry (server-side outbox pattern):
 - Permission validation (linked farmers only)
 - Field validation (approved fields only)
-- Offline queue with retry logic
-- Version conflict detection
-- Integration with Farmer Registry API
+- Server-side queue with exponential backoff retry
+- Version conflict detection (mock-only, Aggregation Layer has no update endpoint yet)
+- Integration with Farmer Registry API (via mock client)
+
+Note: This is NOT client-side offline-first. DAs must be online to submit updates.
+The queue ensures updates don't block the API response and retry on transient failures.
 
 Uses DA Integration Event for persistent queue.
 """
@@ -261,6 +264,10 @@ def get_pending_updates(farmer_id: str) -> list[dict]:
 
 	Used by UI to show "Awaiting sync" status.
 
+	Note: Since reference_id now stores client_op_id (for idempotency),
+	we need to search through all Farmer Update events and filter by
+	farmer_id in the payload.
+
 	Args:
 	    farmer_id: Farmer Registry internal_record_id
 
@@ -271,24 +278,32 @@ def get_pending_updates(farmer_id: str) -> list[dict]:
 		"DA Integration Event",
 		filters={
 			"event_type": "Farmer Update",
-			"reference_id": farmer_id,
 			"status": ("in", ["Pending", "Processing"]),
 		},
-		fields=["name", "status", "attempts", "next_retry_at", "last_error", "modified"],
+		fields=["name", "status", "attempts", "next_retry_at", "last_error", "modified", "payload"],
 		order_by="modified desc",
 	)
 
-	return [
-		{
-			"event_id": e.name,
-			"status": e.status,
-			"attempts": e.attempts,
-			"next_retry": e.next_retry_at,
-			"last_error": e.last_error,
-			"queued_at": e.modified,
-		}
-		for e in events
-	]
+	# Filter events by farmer_id in payload (since reference_id is now client_op_id)
+	farmer_events = []
+	for e in events:
+		try:
+			payload = json.loads(e.payload)
+			if payload.get("farmer_id") == farmer_id:
+				farmer_events.append(
+					{
+						"event_id": e.name,
+						"status": e.status,
+						"attempts": e.attempts,
+						"next_retry": e.next_retry_at,
+						"last_error": e.last_error,
+						"queued_at": e.modified,
+					}
+				)
+		except json.JSONDecodeError, KeyError:
+			continue
+
+	return farmer_events
 
 
 def retry_failed_update(event_name: str) -> dict:
@@ -304,12 +319,19 @@ def retry_failed_update(event_name: str) -> dict:
 
 	Raises:
 	    DoesNotExistError: Event not found
-	    ValidationError: Event not in Failed status
+	    ValidationError: Event not in Failed status or not a Farmer Update event
 	"""
 	if not frappe.db.exists("DA Integration Event", event_name):
 		frappe.throw(_("Event {0} not found.").format(event_name), frappe.DoesNotExistError)
 
 	event = frappe.get_doc("DA Integration Event", event_name)
+
+	# Guard: Only retry Farmer Update events (not grievance events)
+	if event.event_type != "Farmer Update":
+		frappe.throw(
+			_("Event {0} is type '{1}', not 'Farmer Update'.").format(event_name, event.event_type),
+			frappe.ValidationError,
+		)
 
 	if event.status not in ("Failed", "Conflict"):
 		frappe.throw(
@@ -531,3 +553,89 @@ def _calculate_backoff_seconds(attempt: int) -> int:
 	    Backoff seconds (capped at MAX_BACKOFF_SECONDS)
 	"""
 	return min(BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)
+
+
+# ============================================================================
+# SCHEDULER ENTRY POINT
+# ============================================================================
+
+
+def process_pending_farmer_updates() -> None:
+	"""Scheduler entry point: sweep pending farmer updates and recover stale processing rows.
+
+	Called by cron scheduler every 5 minutes (configured in hooks.py).
+
+	Processes only "Farmer Update" events - other event types (e.g., Grievance)
+	have their own processors.
+
+	Handles:
+	- Pending events with next_retry_at <= now
+	- Stale Processing events (stuck for >10 minutes)
+
+	Side effects:
+	    Processes up to 50 pending events per sweep
+	    Resets stale Processing events to Pending
+	"""
+	now = now_datetime()
+
+	# Recover events stuck in Processing state (e.g., server crash mid-processing)
+	_recover_stale_processing_farmer_updates(now)
+
+	# Sweep pending events ready for retry
+	events = frappe.get_all(
+		"DA Integration Event",
+		filters={
+			"event_type": "Farmer Update",
+			"status": "Pending",
+			"next_retry_at": ("<=", now),
+		},
+		fields=["name"],
+		order_by="next_retry_at asc",
+		limit=50,
+	)
+
+	for row in events:
+		try:
+			process_farmer_update(row.name)
+		except Exception as exc:
+			frappe.log_error(
+				f"Failed to process farmer update event {row.name}: {exc}",
+				"Farmer Update Queue Error",
+			)
+
+
+def _recover_stale_processing_farmer_updates(now) -> None:
+	"""Reset farmer update events stuck in Processing for longer than 10 minutes.
+
+	Handles server crashes mid-processing - the row would otherwise be orphaned
+	forever since the scheduler only sweeps Pending rows.
+
+	Only recovers Farmer Update events - leaves Conflict status and other event types alone.
+
+	Args:
+	    now: Current datetime for calculating cutoff
+	"""
+	STALE_PROCESSING_MINUTES = 10
+	cutoff = now - timedelta(minutes=STALE_PROCESSING_MINUTES)
+
+	stale = frappe.get_all(
+		"DA Integration Event",
+		filters={
+			"event_type": "Farmer Update",
+			"status": "Processing",
+			"modified": ("<=", cutoff),
+		},
+		fields=["name"],
+	)
+
+	for row in stale:
+		frappe.db.set_value(
+			"DA Integration Event",
+			row.name,
+			{"status": "Pending", "next_retry_at": now},
+			update_modified=True,
+		)
+
+	if stale:
+		frappe.db.commit()
+		frappe.logger().warning(f"Recovered {len(stale)} stale farmer update events stuck in Processing")

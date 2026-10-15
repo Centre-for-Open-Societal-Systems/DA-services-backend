@@ -21,7 +21,13 @@ Default configuration - uses hardcoded test data, no network calls.
 - `POST /aggregation/v1/staff/registry/search` (by foundationalId)
 - `POST /aggregation/v1/staff/registry/tab` (with searchId + tabId)
 - Keycloak token authentication (realm: staff)
-- No list endpoint available yet (as of Oct 2026)
+- **No update endpoint available yet** (as of Oct 2026)
+
+**Update Endpoint Status (DA-41):**
+- The `update_farmer` endpoint and `expected_version`/optimistic locking are **mock-only**
+- Aggregation Layer has no farmer update API yet
+- Version conflict detection (`If-Match` header) works in mock but is untested against real API
+- When Aggregation Layer adds update support, this will need contract alignment
 
 This HTTP client will be updated once the Aggregation Layer contract is finalized.
 See `docs/DA-Data-Requirements.pdf` for the complete integration specification.
