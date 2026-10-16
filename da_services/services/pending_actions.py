@@ -201,7 +201,9 @@ def _check_credit_status(farmer_id: str) -> PendingActionResult | None:
 				state="Credit in review", priority="medium", reason="Active loan application under review"
 			)
 	except Exception as e:
-		frappe.log_error(title="Pending Actions - Credit Check Failed", message=f"Error for {farmer_id}: {e!s}")
+		frappe.log_error(
+			title="Pending Actions - Credit Check Failed", message=f"Error for {farmer_id}: {e!s}"
+		)
 
 	return None
 

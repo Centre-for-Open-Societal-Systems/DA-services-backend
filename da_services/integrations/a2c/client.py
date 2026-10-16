@@ -218,10 +218,14 @@ def validate_a2c_configuration() -> dict:
 			meta = frappe.get_meta(config["application_doctype"])
 
 			if not meta.has_field(config["farmer_id_field"]):
-				errors.append(f"Field '{config['farmer_id_field']}' not found in {config['application_doctype']}")
+				errors.append(
+					f"Field '{config['farmer_id_field']}' not found in {config['application_doctype']}"
+				)
 
 			if not meta.has_field(config["status_field"]):
-				errors.append(f"Field '{config['status_field']}' not found in {config['application_doctype']}")
+				errors.append(
+					f"Field '{config['status_field']}' not found in {config['application_doctype']}"
+				)
 
 		return {
 			"configured": True,
