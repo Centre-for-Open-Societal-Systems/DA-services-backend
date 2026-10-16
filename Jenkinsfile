@@ -34,7 +34,7 @@ pipeline {
                     def targets = [
                         develop: [
                             namespace: 'develop',
-                            verifyUrl: 'https://da-services-api-development.oanstaging.com'
+                            verifyUrl: 'https://da-backend-development.oanstaging.com'
                         ]
                     ]
                     def target = targets[env.BRANCH_NAME]
