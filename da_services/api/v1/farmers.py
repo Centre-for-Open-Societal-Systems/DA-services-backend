@@ -1,10 +1,12 @@
-"""v1: Farmer profile and listing APIs (DA-40).
+"""v1: Farmer profile and listing APIs (DA-40, DA-39).
 
 GET /api/v1/da-services/farmers
 GET /api/v1/da-services/farmers/{id}/profile
 GET /api/v1/da-services/farmers/{id}/visits
 GET /api/v1/da-services/farmers/{id}/permissions
 GET /api/v1/da-services/farmers/{id}/plots
+
+DA-39: Adds pending action state (system-derived chip) to farmer list.
 
 Scope selector:
 - Development Agent: My linked farmers only
@@ -36,7 +38,7 @@ READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 @frappe.whitelist()
 @handle_api_errors
 def list_farmers(woreda=None, kebele=None, state=None, da_id=None, limit=None, start=None):
-	"""List farmers visible to the user with scope enforcement.
+	"""List farmers visible to the user with scope enforcement (DA-40, DA-39).
 
 	Scope selector:
 	- Development Agent: Only linked farmers
@@ -69,13 +71,22 @@ def list_farmers(woreda=None, kebele=None, state=None, da_id=None, limit=None, s
 	                    "registration_state": "APPROVED",
 	                    "registered_at": "...",
 	                    "visit_count": 5,
-	                    "last_visit": "..."
+	                    "last_visit": "...",
+	                    "pending_action": "Crop survey due",
+	                    "pending_action_priority": "high",
+	                    "pending_action_reason": "Last crop survey 45 days ago"
 	                }
 	            ],
 	            "total": 123,
 	            "page": {"limit": 50, "start": 0}
 	        }
 	    }
+
+	DA-39 Pending Actions:
+	- pending_action: "Crop survey due" | "Livestock due" | "Credit in review" |
+	                  "Fayda check" | "No action due" (system-derived)
+	- pending_action_priority: "high" | "medium" | "low"
+	- pending_action_reason: Optional description
 	"""
 	ctx = require_roles(*READ_ROLES)
 

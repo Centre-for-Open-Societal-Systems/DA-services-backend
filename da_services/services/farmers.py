@@ -1,7 +1,7 @@
-"""Farmer profile and listing services (DA-40).
+"""Farmer profile and listing services (DA-40, DA-39).
 
 Business logic for farmer profile display, combining Farmer Registry data
-with DA Visit history and permission checks.
+with DA Visit history, pending actions (DA-39), and permission checks.
 """
 
 import frappe
@@ -13,6 +13,7 @@ from da_services.integrations.farmer_registry.mapper import (
 	reference_dict_to_profile,
 )
 from da_services.services import constants as C
+from da_services.services.pending_actions import derive_pending_actions_batch
 from da_services.utils.permissions import ScopeContext
 
 
@@ -222,10 +223,31 @@ def list_farmers(
 	total_ids = frappe.get_list("DA Farmer Reference", filters=filters, pluck="name")
 	total = len(total_ids)
 
-	# Enrich with visit counts
-	for farmer in farmers:
-		farmer["visit_count"] = _get_farmer_visit_count(farmer["farmer_id"])
-		farmer["last_visit"] = _get_last_visit_date(farmer["farmer_id"])
+	# Enrich with visit counts and pending actions (DA-39)
+	if farmers:
+		# Batch derive pending actions for all farmers (optimized)
+		farmer_ids = [f["farmer_id"] for f in farmers]
+		pending_actions = derive_pending_actions_batch(farmer_ids)
+
+		# Add visit counts and pending actions to each farmer
+		for farmer in farmers:
+			farmer_id = farmer["farmer_id"]
+
+			# Visit history
+			farmer["visit_count"] = _get_farmer_visit_count(farmer_id)
+			farmer["last_visit"] = _get_last_visit_date(farmer_id)
+
+			# Pending action state (DA-39)
+			pending_action = pending_actions.get(farmer_id)
+			if pending_action:
+				farmer["pending_action"] = pending_action.state
+				farmer["pending_action_priority"] = pending_action.priority
+				if pending_action.reason:
+					farmer["pending_action_reason"] = pending_action.reason
+			else:
+				# Fallback if derivation failed
+				farmer["pending_action"] = "No action due"
+				farmer["pending_action_priority"] = "low"
 
 	return farmers, total
 
