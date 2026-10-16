@@ -24,6 +24,13 @@ from frappe.utils import get_datetime, now_datetime
 
 from da_services.integrations.a2c import get_a2c_client
 
+# Pending action state constants (shared with frontend)
+STATE_FAYDA_CHECK = "Fayda check"
+STATE_CREDIT_IN_REVIEW = "Credit in review"
+STATE_CROP_SURVEY_DUE = "Crop survey due"
+STATE_LIVESTOCK_DUE = "Livestock due"
+STATE_NO_ACTION_DUE = "No action due"
+
 # Type definitions
 PendingActionState = Literal[
 	"Crop survey due", "Livestock due", "Credit in review", "Fayda check", "No action due"
@@ -32,7 +39,7 @@ PendingActionState = Literal[
 PendingActionPriority = Literal["high", "medium", "low"]
 
 # Business rules - thresholds for survey due dates
-# TODO: Move to DA Settings doctype for configurability
+# TODO: Move to site_config or DA Settings doctype for configurability
 CROP_SURVEY_DUE_DAYS = 30
 LIVESTOCK_SURVEY_DUE_DAYS = 60
 
@@ -72,28 +79,9 @@ def derive_pending_action(farmer_id: str, farmer_data: dict | None = None) -> Pe
 	Returns:
 	    PendingActionResult with state, priority, reason
 	"""
-	# Priority 1: Check Fayda verification status
-	fayda_result = _check_fayda_status(farmer_id, farmer_data)
-	if fayda_result:
-		return fayda_result
-
-	# Priority 2: Check credit application status
-	credit_result = _check_credit_status(farmer_id)
-	if credit_result:
-		return credit_result
-
-	# Priority 3: Check crop survey status (visit-based)
-	crop_result = _check_crop_survey_due(farmer_id)
-	if crop_result:
-		return crop_result
-
-	# Priority 4: Check livestock survey status (visit-based)
-	livestock_result = _check_livestock_survey_due(farmer_id)
-	if livestock_result:
-		return livestock_result
-
-	# Priority 5: Default - no action due
-	return PendingActionResult(state="No action due", priority="low", reason=None)
+	# Use batch method to avoid duplicating logic
+	results = derive_pending_actions_batch([farmer_id])
+	return results.get(farmer_id, PendingActionResult(state=STATE_NO_ACTION_DUE, priority="low"))
 
 
 def derive_pending_actions_batch(farmer_ids: list[str]) -> dict[str, PendingActionResult]:
@@ -122,14 +110,23 @@ def derive_pending_actions_batch(farmer_ids: list[str]) -> dict[str, PendingActi
 	# Batch 3: Load last livestock surveys
 	livestock_visits = _get_last_visits_batch(farmer_ids, "Livestock Survey")
 
-	# Batch 4: Check credit applications
-	credit_map = {}
+	# Batch 4: Check credit applications (single batch call)
+	credit_farmer_ids = set()
 	a2c_client = get_a2c_client()
-	for farmer_id in farmer_ids:
-		try:
-			credit_map[farmer_id] = a2c_client.has_active_application(farmer_id)
-		except Exception:
-			credit_map[farmer_id] = False
+	try:
+		credit_farmer_ids = a2c_client.has_active_applications(farmer_ids)
+	except NotImplementedError:
+		# HttpA2CClient raises this when contract is pending
+		frappe.log_error(
+			title="A2C Integration - Contract Pending",
+			message="A2C HTTP API not yet implemented. Using mock client for development.",
+		)
+	except Exception as e:
+		# Log outage once per batch, not per farmer
+		frappe.log_error(
+			title="A2C Integration - Batch Check Failed",
+			message=f"Failed to check {len(farmer_ids)} farmers for credit applications: {e!s}",
+		)
 
 	# Derive pending action for each farmer
 	results = {}
@@ -138,13 +135,19 @@ def derive_pending_actions_batch(farmer_ids: list[str]) -> dict[str, PendingActi
 		result = None
 
 		# Priority 1: Fayda check
+		# Note: Currently uses registration_state as fallback until Fayda
+		# verification service is integrated. FSD 3.4 specifies this should
+		# check Fayda status (Pending/Mismatch) when available.
 		if farmer_data:
 			result = _check_fayda_status(farmer_id, farmer_data)
 
 		# Priority 2: Credit in review
-		if not result and credit_map.get(farmer_id):
+		# Note: Fixed priority - credit (medium) outranks crop-survey-due (high)
+		# as specified in FSD 3.4. Credit applications are time-sensitive and
+		# require immediate DA attention regardless of other pending tasks.
+		if not result and farmer_id in credit_farmer_ids:
 			result = PendingActionResult(
-				state="Credit in review", priority="medium", reason="Active loan application"
+				state=STATE_CREDIT_IN_REVIEW, priority="medium", reason="Active loan application"
 			)
 
 		# Priority 3: Crop survey due
@@ -159,7 +162,7 @@ def derive_pending_actions_batch(farmer_ids: list[str]) -> dict[str, PendingActi
 
 		# Priority 5: Default
 		if not result:
-			result = PendingActionResult(state="No action due", priority="low")
+			result = PendingActionResult(state=STATE_NO_ACTION_DUE, priority="low")
 
 		results[farmer_id] = result
 
@@ -172,7 +175,19 @@ def derive_pending_actions_batch(farmer_ids: list[str]) -> dict[str, PendingActi
 
 
 def _check_fayda_status(farmer_id: str, farmer_data: dict | None = None) -> PendingActionResult | None:
-	"""Check if Fayda verification is pending (registration not approved)."""
+	"""Check if Fayda verification is pending.
+
+	Currently uses registration_state as fallback until Fayda verification
+	service integration is complete. Per FSD 3.4 and contract, this should
+	check Fayda status (Pending/Mismatch) when available.
+
+	Args:
+	    farmer_id: Farmer ID
+	    farmer_data: Optional pre-loaded farmer data
+
+	Returns:
+	    PendingActionResult if Fayda check needed, None otherwise
+	"""
 	if not farmer_data:
 		farmer_data = frappe.db.get_value(
 			"DA Farmer Reference", farmer_id, ["registration_state"], as_dict=True
@@ -183,26 +198,14 @@ def _check_fayda_status(farmer_id: str, farmer_data: dict | None = None) -> Pend
 
 	registration_state = farmer_data.get("registration_state")
 
-	# If registration is pending approval, Fayda verification is needed
-	if registration_state == "PENDING_APPROVAL":
+	# Check for states indicating verification needed
+	# DRAFT: Farmer registration not yet submitted
+	# PENDING_APPROVAL: Farmer registration submitted, awaiting approval
+	if registration_state in ("DRAFT", "PENDING_APPROVAL"):
 		return PendingActionResult(
-			state="Fayda check", priority="high", reason="Farmer registration pending approval"
-		)
-
-	return None
-
-
-def _check_credit_status(farmer_id: str) -> PendingActionResult | None:
-	"""Check if farmer has active credit application."""
-	try:
-		a2c_client = get_a2c_client()
-		if a2c_client.has_active_application(farmer_id):
-			return PendingActionResult(
-				state="Credit in review", priority="medium", reason="Active loan application under review"
-			)
-	except Exception as e:
-		frappe.log_error(
-			title="Pending Actions - Credit Check Failed", message=f"Error for {farmer_id}: {e!s}"
+			state=STATE_FAYDA_CHECK,
+			priority="high",
+			reason=f"Farmer registration {registration_state.lower().replace('_', ' ')}",
 		)
 
 	return None
@@ -228,7 +231,7 @@ def _check_crop_survey_due_with_date(last_survey_date: datetime | None) -> Pendi
 	"""Check if crop survey is due given the last survey date."""
 	if not last_survey_date:
 		return PendingActionResult(
-			state="Crop survey due", priority="high", reason="No crop survey on record"
+			state=STATE_CROP_SURVEY_DUE, priority="high", reason="No crop survey on record"
 		)
 
 	now = now_datetime()
@@ -240,7 +243,7 @@ def _check_crop_survey_due_with_date(last_survey_date: datetime | None) -> Pendi
 		priority = "high" if days_overdue >= 15 else "medium"
 
 		return PendingActionResult(
-			state="Crop survey due",
+			state=STATE_CROP_SURVEY_DUE,
 			priority=priority,
 			reason=f"Last crop survey {days_since} days ago",
 			days_overdue=days_overdue,
@@ -278,7 +281,7 @@ def _check_livestock_survey_due_with_date(last_survey_date: datetime | None) -> 
 	if days_since > LIVESTOCK_SURVEY_DUE_DAYS:
 		days_overdue = days_since - LIVESTOCK_SURVEY_DUE_DAYS
 		return PendingActionResult(
-			state="Livestock due",
+			state=STATE_LIVESTOCK_DUE,
 			priority="medium",
 			reason=f"Last livestock survey {days_since} days ago",
 			days_overdue=days_overdue,
