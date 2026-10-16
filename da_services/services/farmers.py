@@ -1,7 +1,7 @@
-"""Farmer profile and listing services (DA-40).
+"""Farmer profile and listing services (DA-40, DA-39).
 
 Business logic for farmer profile display, combining Farmer Registry data
-with DA Visit history and permission checks.
+with DA Visit history, pending actions (DA-39), and permission checks.
 """
 
 import frappe
@@ -13,6 +13,7 @@ from da_services.integrations.farmer_registry.mapper import (
 	reference_dict_to_profile,
 )
 from da_services.services import constants as C
+from da_services.services.pending_actions import derive_pending_actions_batch
 from da_services.utils.permissions import ScopeContext
 
 
@@ -222,10 +223,33 @@ def list_farmers(
 	total_ids = frappe.get_list("DA Farmer Reference", filters=filters, pluck="name")
 	total = len(total_ids)
 
-	# Enrich with visit counts
-	for farmer in farmers:
-		farmer["visit_count"] = _get_farmer_visit_count(farmer["farmer_id"])
-		farmer["last_visit"] = _get_last_visit_date(farmer["farmer_id"])
+	# Enrich with visit counts and pending actions (DA-39)
+	if farmers:
+		# Batch operations for all farmers (optimized - no N+1)
+		farmer_ids = [f["farmer_id"] for f in farmers]
+		pending_actions = derive_pending_actions_batch(farmer_ids)
+		visit_counts = _get_farmer_visit_counts_batch(farmer_ids)
+		last_visits = _get_last_visit_dates_batch(farmer_ids)
+
+		# Add visit counts and pending actions to each farmer
+		for farmer in farmers:
+			farmer_id = farmer["farmer_id"]
+
+			# Visit history (batched)
+			farmer["visit_count"] = visit_counts.get(farmer_id, 0)
+			farmer["last_visit"] = last_visits.get(farmer_id)
+
+			# Pending action state (DA-39)
+			pending_action = pending_actions.get(farmer_id)
+			if pending_action:
+				farmer["pending_action"] = pending_action.state
+				farmer["pending_action_priority"] = pending_action.priority
+				if pending_action.reason:
+					farmer["pending_action_reason"] = pending_action.reason
+			else:
+				# Fallback if derivation failed
+				farmer["pending_action"] = "No action due"
+				farmer["pending_action_priority"] = "low"
 
 	return farmers, total
 
@@ -376,6 +400,67 @@ def _get_last_visit_date(farmer_id: str) -> str | None:
 		"scheduled_at",
 		order_by="scheduled_at desc",
 	)
+
+
+def _get_farmer_visit_counts_batch(farmer_ids: list[str]) -> dict[str, int]:
+	"""Get visit counts for multiple farmers (batch query).
+
+	Args:
+	    farmer_ids: List of farmer IDs
+
+	Returns:
+	    Dict mapping farmer_id -> visit count
+	"""
+	if not farmer_ids:
+		return {}
+
+	# Single query with GROUP BY
+	counts = frappe.db.sql(
+		"""
+		SELECT farmer_id, COUNT(*) as count
+		FROM `tabDA Visit`
+		WHERE farmer_id IN %(farmer_ids)s
+		GROUP BY farmer_id
+		""",
+		{"farmer_ids": farmer_ids},
+		as_dict=True,
+	)
+
+	return {row["farmer_id"]: row["count"] for row in counts}
+
+
+def _get_last_visit_dates_batch(farmer_ids: list[str]) -> dict[str, str | None]:
+	"""Get last visit dates for multiple farmers (batch query).
+
+	Args:
+	    farmer_ids: List of farmer IDs
+
+	Returns:
+	    Dict mapping farmer_id -> last visit scheduled_at
+	"""
+	if not farmer_ids:
+		return {}
+
+	# Single query to get most recent visit per farmer
+	# Using subquery to get max(scheduled_at) per farmer
+	visits = frappe.db.sql(
+		"""
+		SELECT v.farmer_id, v.scheduled_at
+		FROM `tabDA Visit` v
+		INNER JOIN (
+			SELECT farmer_id, MAX(scheduled_at) as max_scheduled
+			FROM `tabDA Visit`
+			WHERE farmer_id IN %(farmer_ids)s
+			GROUP BY farmer_id
+		) latest ON v.farmer_id = latest.farmer_id
+		          AND v.scheduled_at = latest.max_scheduled
+		WHERE v.farmer_id IN %(farmer_ids)s
+		""",
+		{"farmer_ids": farmer_ids},
+		as_dict=True,
+	)
+
+	return {row["farmer_id"]: row["scheduled_at"] for row in visits}
 
 
 def _can_edit_farmer(farmer_id: str, ctx: ScopeContext) -> bool:
